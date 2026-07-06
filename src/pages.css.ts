@@ -452,13 +452,15 @@ select option {
 }
 
 .bd-on {
-  background: var(--success-bg);
-  color: var(--success);
+  background: rgba(16,185,129,0.18);
+  color: #6ee7b7;
+  box-shadow: 0 0 0 1px rgba(16,185,129,0.15);
 }
 
 .bd-off {
-  background: rgba(113,113,122,0.15);
-  color: var(--text-muted);
+  background: rgba(82,82,91,0.2);
+  color: var(--zinc-600);
+  box-shadow: 0 0 0 1px rgba(63,63,70,0.2);
 }
 
 .bd-info {
