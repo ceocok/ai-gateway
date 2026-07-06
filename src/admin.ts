@@ -169,6 +169,97 @@ export async function handleTestModel(c: Context<{ Bindings: Env }>) {
   })
 }
 
+// ===== sub2api 导入 =====
+
+/**
+ * 将 sub2api 导出的 JSON 解析并导入为提供商
+ * 只导入 type 为 apikey 的账号（oauth 的 token 会过期，不导入）
+ */
+export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
+  const body = await c.req.json<{ data: string }>()
+  let parsed: any
+  try {
+    parsed = typeof body.data === 'string' ? JSON.parse(body.data) : body.data
+  } catch {
+    return c.json<ApiResponse>({ success: false, message: 'JSON 解析失败，请检查文件格式' }, 400)
+  }
+
+  const rawAccounts = parsed.accounts
+  if (!Array.isArray(rawAccounts) || rawAccounts.length === 0) {
+    return c.json<ApiResponse>({ success: false, message: '未找到有效的 accounts 数据' }, 400)
+  }
+
+  const existing = await getProviders(c.env)
+  const existingIds = new Set(existing.map(p => p.id))
+  const imported: Provider[] = []
+  const skipped: Array<{ name: string; reason: string }> = []
+
+  for (const acct of rawAccounts) {
+    // 只导入 apikey 类型
+    if (acct.type !== 'apikey') {
+      skipped.push({ name: acct.name || '(unnamed)', reason: '非 apikey 类型（oauth），跳过' })
+      continue
+    }
+
+    const name = acct.name?.trim() || 'imported'
+    const baseUrl = acct.credentials?.base_url?.replace(/\/$/, '') || ''
+    const apiKey = acct.credentials?.api_key || ''
+    const modelMapping = acct.credentials?.model_mapping || {}
+
+    if (!baseUrl || !apiKey) {
+      skipped.push({ name, reason: '缺少 base_url 或 api_key' })
+      continue
+    }
+
+    // 生成唯一 ID
+    let id = name
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .substring(0, 48) || 'imported'
+
+    // 处理 ID 冲突（与已有提供商 + 本次导入的其他账户）
+    if (existingIds.has(id)) {
+      let suffix = 1
+      while (existingIds.has(`${id}-${suffix}`)) suffix++
+      id = `${id}-${suffix}`
+    }
+    existingIds.add(id)
+
+    const now = new Date().toISOString()
+    const models: Array<{ id: string; enabled: boolean }> = Object.keys(modelMapping).map(mid => ({
+      id: mid,
+      enabled: true,
+    }))
+
+    const provider: Provider = {
+      id,
+      name,
+      baseUrl,
+      apiType: acct.platform === 'anthropic' ? 'anthropic' : 'openai',
+      apiKeys: [{ key: apiKey, enabled: true }],
+      models,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    await addProvider(c.env, provider)
+    imported.push(provider)
+  }
+
+  return c.json<ApiResponse>({
+    success: true,
+    data: {
+      imported: imported.map(p => ({ id: p.id, name: p.name, models: p.models.length })),
+      skipped,
+      total: imported.length,
+    },
+    message: `成功导入 ${imported.length} 个提供商${skipped.length ? `，${skipped.length} 个跳过` : ''}`,
+  })
+}
+
 // ===== 转发 Key 管理 =====
 
 export async function handleGetProxyKeys(c: Context<{ Bindings: Env }>) {

@@ -275,6 +275,7 @@ ${H('管理')}
   <div class="card-hd">
     <h2><i class="fas fa-server"></i>提供商</h2>
     <button class="btn btn-p btn-xs" onclick="showAdd()"><i class="fas fa-plus"></i> 添加</button>
+    <button class="btn btn-gh btn-xs" onclick="showImport()"><i class="fas fa-file-import"></i> 导入 sub2api</button>
   </div>
 
   <!-- 添加表单 -->
@@ -325,8 +326,19 @@ ${H('管理')}
   <div id="amc" class="hd mdl-list-panel">
     <h3 class="fs-88 mb-10"><i class="fas fa-cube c-p"></i> 可用模型</h3>
     <div id="amcl"></div>
+    <div id="s2a" class="hd add-form-panel">
+    <h3 class="fs-88 mb-10"><i class="fas fa-file-import c-p"></i> 导入 sub2api</h3>
+    <p class="mu mb-2">选择 sub2api 导出的 JSON 文件，自动解析并创建提供商（仅导入 apikey 类型账号）</p>
+    <div class="fg"><label>选择文件</label>
+      <input type="file" id="s2afile" accept=".json" style="padding:4px;font-size:.82rem;">
+    </div>
+    <div class="fc gap-8">
+      <button class="btn btn-p btn-xs" onclick="doImportSub2Api()"><i class="fas fa-upload"></i> 开始导入</button>
+      <button class="btn btn-gh btn-xs" onclick="hideImport()"><i class="fas fa-times"></i> 取消</button>
+    </div>
+    <div id="s2ar" class="mt-2"></div>
   </div>
-  </div>
+</div>
 
   <!-- 列表 -->
   <div class="gp" id="plist">
@@ -790,6 +802,54 @@ async function rmKey(id) {
   const d = await r.json()
   if (d.success) { toast('已删除', 'success'); location.reload() }
   else toast(d.message || '删除失败', 'error')
+}
+
+
+// sub2api 导入
+function showImport() {
+  document.getElementById('s2a').classList.remove('hd')
+  document.getElementById('s2ar').innerHTML = ''
+  document.getElementById('s2afile').value = ''
+}
+function hideImport() {
+  document.getElementById('s2a').classList.add('hd')
+}
+async function doImportSub2Api() {
+  const fileInput = document.getElementById('s2afile')
+  const file = fileInput.files[0]
+  if (!file) { toast('请选择 JSON 文件', 'error'); return }
+  const tr = document.getElementById('s2ar')
+  tr.innerHTML = '<span class="mu"><i class="fas fa-spinner fa-spin"></i> 正在解析导入...</span>'
+  try {
+    const text = await file.text()
+    const r = await fetch('/admin/api/providers/import-sub2api', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: text })
+    })
+    const d = await r.json()
+    if (d.success && d.data) {
+      let html = '<div class="al al-s"><i class="fas fa-check-circle"></i> ' + d.message + '</div>'
+      if (d.data.imported && d.data.imported.length > 0) {
+        html += '<div style="margin-top:6px;font-size:.8rem;"><b>导入的提供商：</b></div>'
+        d.data.imported.forEach(function(p) {
+          html += '<div style="padding:3px 6px;font-size:.78rem;border-bottom:1px solid var(--c-border);display:flex;justify-content:space-between;"><span><i class="fas fa-server c-p"></i> ' + p.name + '</span><span class="c-muted">' + p.models + ' 个模型</span></div>'
+        })
+      }
+      if (d.data.skipped && d.data.skipped.length > 0) {
+        html += '<div style="margin-top:6px;font-size:.8rem;color:var(--c-text-muted);"><b>跳过的账号：</b></div>'
+        d.data.skipped.forEach(function(s) {
+          html += '<div style="padding:2px 6px;font-size:.76rem;color:var(--c-text-light);"><i class="fas fa-info-circle"></i> ' + s.name + ' (' + s.reason + ')</div>'
+        })
+      }
+      html += '<div class="fc mt-2 gap-8"><button class="btn btn-s btn-xs" onclick="location.reload()"><i class="fas fa-sync"></i> 刷新页面</button></div>'
+      tr.innerHTML = html
+    } else {
+      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (d.message || '导入失败') + '</div>'
+    }
+  } catch (e) {
+    tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 请求失败：' + e.message + '</div>'
+  }
 }
 
 // proxy key list interactions
