@@ -440,7 +440,7 @@ function cM(msg) {
 
 function pM(msg) {
   return new Promise(function(resolve) {
-    showM('<h3><i class="fas fa-pen" style="color:var(--primary);"></i> 输入</h3><p>' + msg + '</p><div class="fg"><input type="text" id="pMinp" placeholder="输入内容"></div><div class="fa" style="justify-content:flex-end;"><button class="btn btn-s" onclick="closeM();resolve(null)">取消</button><button class="btn btn-p" onclick="closeM();resolve(document.getElementById(\'pMinp\').value.trim() || null)">确定</button></div>')
+    showM('<h3><i class="fas fa-pen" style="color:var(--primary);"></i> 输入</h3><p>' + msg + '</p><div class="fg"><input type="text" id="pMinp" placeholder="输入内容"></div><div class="fa" style="justify-content:flex-end;"><button class="btn btn-s" onclick="closeM();resolve(null)">取消</button><button class="btn btn-p" onclick="closeM();resolve(document.getElementById(\\'pMinp\\').value.trim() || null)">确定</button></div>')
     window.resolve = resolve
   })
 }
