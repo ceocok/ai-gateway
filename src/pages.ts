@@ -326,7 +326,8 @@ ${H('管理')}
   <div id="amc" class="hd mdl-list-panel">
     <h3 class="fs-88 mb-10"><i class="fas fa-cube c-p"></i> 可用模型</h3>
     <div id="amcl"></div>
-    <div id="s2a" class="hd add-form-panel">
+  </div>
+  <div id="s2a" class="hd add-form-panel">
     <h3 class="fs-88 mb-10"><i class="fas fa-file-import c-p"></i> 导入 sub2api</h3>
     <p class="mu mb-2">选择 sub2api 导出的 JSON 文件，自动解析并创建提供商（仅导入 apikey 类型账号）</p>
     <div class="fg"><label>选择文件</label>
