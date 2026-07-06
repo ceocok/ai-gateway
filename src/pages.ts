@@ -81,11 +81,6 @@ ${H('首页')}
           </h3>
           <span class="bd ${p.enabled?'bd-on':'bd-off'}">${p.enabled?'已启用':'未启用'}</span>
         </div>
-        <p class="mu fc gp3" style="margin-top:3px;font-size:.75rem;">
-          <i class="fas fa-link fx-s0"></i>
-          <span class="ov fx1">${p.baseUrl}</span>
-          <i class="fas fa-copy cp fx-s0 copy-icon" onclick='copyText("${p.baseUrl}",this)'></i>
-        </p>
         ${p.models.filter(m=>m.enabled).length
           ? `<div class="mw">${p.models.filter(m=>m.enabled).map(m=>`<span class="tag" onclick='copyText("${p.id}/${m.id}",this)'><i class="fas fa-cube"></i>${p.id}/${m.id}</span>`).join('')}</div>`
           : `<p class="mu fs-i" style="margin-top:5px;">暂无启用的模型</p>`
