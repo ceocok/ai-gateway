@@ -1,5 +1,5 @@
 import { KV_KEYS } from './config'
-import type { Env, Provider, ProxyKey, Session } from './types'
+import type { Env, Provider, ProviderHealth, ProxyKey, Session } from './types'
 
 // ===== 提供商 CRUD =====
 
@@ -40,6 +40,63 @@ export async function deleteProvider(env: Env, id: string): Promise<boolean> {
   return true
 }
 
+
+// ===== Provider 健康状态 =====
+
+export async function getProviderHealth(env: Env, providerId: string): Promise<ProviderHealth | null> {
+  const raw = await env.KV.get(KV_KEYS.PROVIDER_HEALTH_PREFIX + providerId)
+  return raw ? JSON.parse(raw) : null
+}
+
+export async function getAllProviderHealth(env: Env): Promise<Record<string, ProviderHealth>> {
+  const providers = await getProviders(env)
+  const result: Record<string, ProviderHealth> = {}
+  for (const p of providers) {
+    const h = await getProviderHealth(env, p.id)
+    if (h) result[p.id] = h
+  }
+  return result
+}
+
+export async function setProviderHealth(env: Env, providerId: string, health: ProviderHealth): Promise<void> {
+  await env.KV.put(KV_KEYS.PROVIDER_HEALTH_PREFIX + providerId, JSON.stringify(health))
+}
+
+export async function clearProviderHealth(env: Env, providerId: string): Promise<void> {
+  await env.KV.delete(KV_KEYS.PROVIDER_HEALTH_PREFIX + providerId).catch(() => {})
+}
+
+export async function autoPauseProvider(env: Env, providerId: string, error: string): Promise<void> {
+  const provider = await getProvider(env, providerId)
+  if (!provider || !provider.enabled) return
+
+  // 更新 provider enabled = false
+  await updateProvider(env, providerId, { enabled: false })
+
+  // 写入健康记录
+  const health: ProviderHealth = {
+    autoPaused: true,
+    autoPausedAt: new Date().toISOString(),
+    lastError: error,
+    lastErrorAt: new Date().toISOString(),
+    demotedKeys: 0,
+    keyStats: { total: 0, healthy: 0, demoted: 0 },
+  }
+  await setProviderHealth(env, providerId, health)
+}
+
+export async function recoverProvider(env: Env, providerId: string): Promise<boolean> {
+  const provider = await getProvider(env, providerId)
+  if (!provider) return false
+
+  // 清空 key 级健康记录
+  await env.KV.delete(KV_KEYS.KEY_HEALTH_PREFIX + providerId).catch(() => {})
+  // 清空 provider 级健康记录
+  await clearProviderHealth(env, providerId)
+  // 重新启用
+  await updateProvider(env, providerId, { enabled: true })
+  return true
+}
 // ===== Session 管理 =====
 
 export async function createSession(env: Env, username: string, ttlSeconds: number): Promise<string> {

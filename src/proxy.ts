@@ -1,5 +1,5 @@
 import { Context } from 'hono'
-import { getProvider, getProviders } from './storage'
+import { getProvider, getProviders, autoPauseProvider } from './storage'
 import { KV_KEYS, KEY_HEALTH_COOLDOWN_MS } from './config'
 import type { Env, ProxyRequestBody } from './types'
 
@@ -31,6 +31,15 @@ async function writeHealth(env: Env, providerId: string, health: HealthMap): Pro
     // 全部健康，删除 KV 条目
     await env.KV.delete(HEALTH_KEY(providerId)).catch(() => {})
   }
+}
+
+/** 从响应头解析 Retry-After 返回冷却毫秒 */
+function parseRetryAfterMs(response: Response): number | null {
+  const val = response.headers.get('Retry-After')
+  if (!val) return null
+  const seconds = parseInt(val, 10)
+  if (!isNaN(seconds) && seconds > 0) return seconds * 1000
+  return null
 }
 
 /** 解析模型 ID，如 "deepseek/deepseek-chat" → { providerId, modelId } */
@@ -251,7 +260,13 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
           h.failures++
           h.lastFailed = true
           if (h.failures >= 3) {
-            h.demotedAt = Date.now()  // 达到降权阈值或试用失败，重置冷却计时
+            // 429: 使用上游返回的 Retry-After 作为精确冷却时间
+            if (response.status === 429) {
+              const retryAfterMs = parseRetryAfterMs(response)
+              h.demotedAt = Date.now() - KEY_HEALTH_COOLDOWN_MS + (retryAfterMs ?? KEY_HEALTH_COOLDOWN_MS)
+            } else {
+              h.demotedAt = Date.now()  // 达到降权阈值或试用失败，重置冷却计时
+            }
           }
           healthData[apiKey] = h
           healthUpdated = true
@@ -283,8 +298,17 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
     // 写回健康状态
     if (healthUpdated) await writeHealth(c.env, providerId, healthData)
 
-    // 所有 key 均失败
+    // 所有 key 均失败 → 检查是否全部降权，自动暂停 provider
     if (lastError) {
+      if (healthUpdated) {
+        const demotedCount = enabledKeys.filter(k => {
+          const h = healthData[k.key]
+          return h && h.failures >= 3
+        }).length
+        if (demotedCount >= enabledKeys.length && enabledKeys.length > 0) {
+          await autoPauseProvider(c.env, providerId, `所有 Key 已降权: HTTP ${lastError.status || 502}`)
+        }
+      }
       const errorBody = await lastError.text().catch(() => '所有 API Key 均失败')
       return c.json({
         error: {

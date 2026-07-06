@@ -5,6 +5,9 @@ import {
   addProvider,
   updateProvider,
   deleteProvider,
+  getProviderHealth,
+  getAllProviderHealth,
+  recoverProvider,
   getProxyKeys,
   addProxyKey,
   updateProxyKey,
@@ -257,6 +260,80 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
       total: imported.length,
     },
     message: `成功导入 ${imported.length} 个提供商${skipped.length ? `，${skipped.length} 个跳过` : ''}`,
+  })
+}
+
+// ===== Provider 健康状态和恢复 =====
+
+export async function handleGetProviderHealth(c: Context<{ Bindings: Env }>) {
+  const providers = await getProviders(c.env)
+  const healthMap = await getAllProviderHealth(c.env)
+
+  // 同时读取 key 级健康数据
+  const data = await Promise.all(providers.map(async (p) => {
+    const h = healthMap[p.id] || null
+    let keyStats = { total: 0, healthy: 0, demoted: 0 }
+    let demotedKeys = 0
+    try {
+      const raw = await c.env.KV.get('key:health:' + p.id)
+      if (raw) {
+        const kh = JSON.parse(raw)
+        const keys = Object.values(kh) as Array<{ failures: number }>
+        keyStats.total = p.apiKeys.filter(k => k.enabled).length
+        keyStats.demoted = keys.filter(k => k.failures >= 3).length
+        keyStats.healthy = keyStats.total - keys.filter(k => k.failures >= 1).length
+        demotedKeys = keyStats.demoted
+      }
+    } catch {}
+    return {
+      id: p.id,
+      name: p.name,
+      enabled: p.enabled,
+      health: h ? { ...h, demotedKeys, keyStats } : null,
+      keyStats: keyStats.total > 0 ? keyStats : null,
+    }
+  }))
+
+  return c.json<ApiResponse>({ success: true, data })
+}
+
+export async function handleRecoverProvider(c: Context<{ Bindings: Env }>) {
+  const id = c.req.param('id')
+  if (!id) return c.json<ApiResponse>({ success: false, message: '缺少 id 参数' }, 400)
+
+  const provider = await getProvider(c.env, id)
+  if (!provider) {
+    return c.json<ApiResponse>({ success: false, message: '提供商不存在' }, 404)
+  }
+
+  // 找第一个可用的 API Key 和模型测试
+  const enabledKeys = provider.apiKeys.filter(k => k.enabled)
+  if (enabledKeys.length === 0) {
+    return c.json<ApiResponse>({ success: false, message: '该提供商没有可用的 API Key' }, 400)
+  }
+
+  const enabledModels = provider.models.filter(m => m.enabled)
+  if (enabledModels.length === 0) {
+    return c.json<ApiResponse>({ success: false, message: '该提供商没有启用的模型' }, 400)
+  }
+
+  const apiKey = enabledKeys[0].key
+  const modelId = enabledModels[0].id
+  const result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType)
+
+  if (result.success) {
+    await recoverProvider(c.env, id)
+    return c.json<ApiResponse>({
+      success: true,
+      data: result,
+      message: `恢复成功，提供商 "${provider.name}" 已重新启用`,
+    })
+  }
+
+  return c.json<ApiResponse>({
+    success: false,
+    data: result,
+    message: `恢复失败: ${result.message}`,
   })
 }
 

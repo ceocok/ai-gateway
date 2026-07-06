@@ -74,6 +74,19 @@ export interface ApiResponse<T = unknown> {
   message?: string
 }
 
+export interface ProviderHealth {
+  autoPaused: boolean
+  autoPausedAt: string
+  lastError: string
+  lastErrorAt: string
+  demotedKeys: number
+  keyStats: {
+    total: number
+    healthy: number
+    demoted: number
+  }
+}
+
 export interface Env {
   KV: KVNamespace
   ADMIN_USERNAME?: string

@@ -211,6 +211,64 @@ async function toggleProxyKey(id, checked) {
   const d = await r.json()
   if (!d.success) toast(d.message || '操作失败', 'error')
 }
+// 健康状态
+async function loadHealth() {
+  try {
+    const r = await fetch('/admin/api/providers/health')
+    const d = await r.json()
+    if (!d.success || !d.data) return
+    d.data.forEach(function(p) {
+      const badge = document.getElementById('hb-' + p.id)
+      if (badge) {
+        if (p.health && p.health.autoPaused) {
+          badge.innerHTML = '<span class="bd" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-pause-circle"></i> \u5df2\u6682\u505c</span>'
+        } else if (p.keyStats && p.keyStats.demoted > 0) {
+          badge.innerHTML = '<span class="bd" style="background:#fefce8;color:#a16207;"><i class="fas fa-exclamation-triangle"></i> \u964d\u7ea7</span>'
+        } else if (p.keyStats && p.keyStats.demoted === 0 && p.keyStats.total > 0) {
+          badge.innerHTML = '<span class="bd bd-on"><i class="fas fa-check-circle"></i> \u5065\u5eb7</span>'
+        } else if (!p.enabled && !(p.health && p.health.autoPaused)) {
+          badge.innerHTML = '<span class="bd bd-off"><i class="fas fa-ban"></i> \u5df2\u7981\u7528</span>'
+        }
+      }
+      const section = document.getElementById('hs-' + p.id)
+      if (section) {
+        var html = ''
+        if (p.health && p.health.autoPaused) {
+          html += '<div class="al al-e" style="margin-bottom:4px;"><i class="fas fa-exclamation-circle"></i> <b>\u5df2\u81ea\u52a8\u6682\u505c</b><br><span class="fs-xxs">' + escHtml(p.health.lastError) + '</span></div>'
+          html += '<div class="fc gap-8"><button class="btn btn-p btn-xs" onclick="recoverProv(\'' + p.id + '\')"><i class="fas fa-sync"></i> \u6062\u590d</button></div>'
+        } else if (p.keyStats && p.keyStats.demoted > 0) {
+          html += '<div class="al al-i" style="margin-bottom:4px;"><i class="fas fa-info-circle"></i> <b>\u90e8\u5206 Key \u964d\u7ea7</b><br><span class="fs-xxs">' + p.keyStats.healthy + '/' + p.keyStats.total + ' \u4e2a Key \u5065\u5eb7\uff0c' + p.keyStats.demoted + ' \u4e2a\u5df2\u964d\u6743</span></div>'
+        } else if (p.keyStats && p.keyStats.total > 0) {
+          html += '<div class="al al-s" style="margin-bottom:4px;"><i class="fas fa-check-circle"></i> <b>\u6240\u6709 Key \u5065\u5eb7</b></div>'
+        }
+        if (html) section.innerHTML = html
+      }
+    })
+  } catch (e) {}
+}
+
+function escHtml(s) { var d = document.createElement('div'); d.appendChild(document.createTextNode(s)); return d.innerHTML }
+
+async function recoverProv(id) {
+  if (!(await cM('\u786e\u5b9a\u8981\u6062\u590d\u6b64\u63d0\u4f9b\u5546\uff1f\u5c06\u6e05\u7a7a\u6240\u6709\u5065\u5eb7\u8bb0\u5f55\u5e76\u91cd\u65b0\u542f\u7528\u3002'))) return
+  const tr = document.getElementById('hs-' + id)
+  if (tr) tr.innerHTML = '<span class="mu"><i class="fas fa-spinner fa-spin"></i> \u6062\u590d\u4e2d...</span>'
+  try {
+    const r = await fetch('/admin/api/providers/' + encodeURIComponent(id) + '/recover', { method: 'POST' })
+    const d = await r.json()
+    if (d.success) {
+      toast('\u5df2\u6062\u590d\u5e76\u91cd\u65b0\u542f\u7528', 'success')
+      location.reload()
+    } else {
+      if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (d.message || '\u6062\u590d\u5931\u8d25') + '</div>'
+    }
+  } catch (e) {
+    if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> \u8bf7\u6c42\u5931\u8d25</div>'
+  }
+}
+
+// \u9875\u9762\u52a0\u8f7d\u5b8c\u6210\u540e\u52a0\u8f7d\u5065\u5eb7\u72b6\u6001
+loadHealth()
 </script>
 </body></html>`)
 		}
@@ -348,7 +406,7 @@ ${H('管理')}
       <div class="ps" onclick="tog('${p.id}')">
         <div class="l">
           <i class="fas fa-chevron-right c-l fs-65" style="transition:transform .12s;" id="ch-${p.id}"></i>
-          <div><h3>${p.name}</h3>
+          <div><h3>${p.name} <span id="hb-${p.id}"></span></h3>
             <div class="pu"><i class="fas fa-link"></i>
               <span class="ov">${p.baseUrl}</span>
               <i class="fas fa-copy cp" onclick="event.stopPropagation();copyText('${p.baseUrl}',this)"></i>
@@ -405,6 +463,7 @@ ${H('管理')}
             <input type="text" id="nmid-${p.id}" placeholder="模型 ID" class="fx1">
             <button class="btn btn-gh btn-xs" onclick="addMdl('${p.id}')"><i class="fas fa-plus"></i> 添加</button></div>
         </div>
+        <div id="hs-${p.id}" class="health-section mt-2"></div>
         <div class="fc gap-8 mt-2">
           <span class="fx1"></span>
           <button class="btn btn-g btn-xs" onclick="save('${p.id}')"><i class="fas fa-save"></i> 保存</button>
