@@ -1,7 +1,7 @@
 import { Context } from 'hono'
 import { getProvider, getProviders, autoPauseProvider } from './storage'
 import { KV_KEYS, KEY_HEALTH_COOLDOWN_MS } from './config'
-import type { Env, ProxyRequestBody } from './types'
+import type { Env, Provider, ProxyRequestBody } from './types'
 
 // ===== Key 健康状态类型和辅助函数 =====
 
@@ -52,6 +52,18 @@ function parseModelId(model: string): { providerId: string; modelId: string } | 
   }
 }
 
+export function buildEndpointUrls(baseUrl: string, subPath: string, search = ''): string[] {
+  const cleanBase = baseUrl.replace(/\/$/, '')
+  const cleanSubPath = subPath.replace(/^\//, '')
+  const urls = [`${cleanBase}/${cleanSubPath}${search}`]
+
+  if (!/\/v1$/i.test(cleanBase)) {
+    urls.push(`${cleanBase}/v1/${cleanSubPath}${search}`)
+  }
+
+  return urls
+}
+
 /** 测试模型连接，发送最小请求验证 */
 export async function testModelConnection(
   baseUrl: string,
@@ -60,9 +72,8 @@ export async function testModelConnection(
   apiType?: 'openai' | 'anthropic'
 ): Promise<{ success: boolean; message: string; statusCode?: number }> {
   try {
-    const cleanBase = baseUrl.replace(/\/$/, '')
     const endpoint = apiType === 'anthropic' ? 'messages' : 'chat/completions'
-    const url = `${cleanBase}/${endpoint}`
+    const urls = buildEndpointUrls(baseUrl, endpoint)
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -74,33 +85,46 @@ export async function testModelConnection(
       headers['Authorization'] = `Bearer ${apiKey}`
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: modelId,
-        messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 1,
-      }),
-      signal: AbortSignal.timeout(15000),
-    })
+    let lastResponse: Response | null = null
+    for (let i = 0; i < urls.length; i++) {
+      const response = await fetch(urls[i], {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 1,
+        }),
+        signal: AbortSignal.timeout(15000),
+      })
 
-    if (response.ok) {
+      if (response.status === 404 && i < urls.length - 1) {
+        lastResponse = response
+        continue
+      }
+
+      lastResponse = response
+      break
+    }
+
+    const response = lastResponse
+
+    if (response?.ok) {
       return { success: true, message: '连接成功', statusCode: response.status }
     }
 
     let errorBody = ''
     try {
-      const errorData = await response.json() as { error?: { message?: string } }
+      const errorData = await response?.json() as { error?: { message?: string } }
       errorBody = errorData?.error?.message || JSON.stringify(errorData)
     } catch {
-      errorBody = await response.text()
+      errorBody = await response?.text() || '无响应'
     }
 
     return {
       success: false,
-      message: `HTTP ${response.status}: ${errorBody.substring(0, 200)}`,
-      statusCode: response.status,
+      message: `HTTP ${response?.status || 0}: ${errorBody.substring(0, 200)}`,
+      statusCode: response?.status,
     }
   } catch (err) {
     const error = err as Error
@@ -121,221 +145,52 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
       return c.json({ error: { message: '缺少 model 参数', type: 'invalid_request_error' } }, 400)
     }
 
+    const forwardBody = { ...body }
     const parsed = parseModelId(model)
-    let providerId: string
-    let modelId: string
 
     if (parsed) {
-      providerId = parsed.providerId
-      modelId = parsed.modelId
-    } else {
-      // 无提供商前缀：搜索所有已启用提供商
-      modelId = model
-      const allProviders = await getProviders(c.env)
-      const found = allProviders.find(p =>
-        p.enabled && p.models.some(m => m.id === modelId && m.enabled)
-      )
-      if (!found) {
-        return c.json({
-          error: {
-            message: `模型 "${model}" 不存在于任何已启用的提供商中，请使用 提供商ID/模型ID 格式`,
-            type: 'invalid_request_error',
-          },
-        }, 404)
+      // 显式指定提供商: providerId/modelId
+      const provider = await getProvider(c.env, parsed.providerId)
+      if (!provider) {
+        return c.json({ error: { message: `提供商 "${parsed.providerId}" 不存在`, type: 'invalid_request_error' } }, 404)
       }
-      providerId = found.id
+      forwardBody.model = parsed.modelId
+      const result = await tryProvider(c, provider, parsed.modelId, forwardBody)
+      if (result) return result
+      return c.json({ error: { message: `提供商 "${provider.name}" 的所有 Key 均不可用`, type: 'key_exhausted' } }, 502)
     }
 
-    const provider = await getProvider(c.env, providerId)
-
-    if (!provider) {
+    // 无前缀：搜索所有已启用提供商，随机容灾切换
+    const modelId = model
+    forwardBody.model = modelId
+    const allProviders = await getProviders(c.env)
+    const candidates = allProviders.filter(p =>
+      p.enabled && p.models.some(m => m.id === modelId && m.enabled)
+    )
+    if (candidates.length === 0) {
       return c.json({
-        error: { message: `提供商 "${providerId}" 不存在`, type: 'invalid_request_error' },
+        error: { message: `模型 "${model}" 不存在于任何已启用的提供商中`, type: 'invalid_request_error' },
       }, 404)
     }
 
-    if (!provider.enabled) {
-      return c.json({
-        error: { message: `提供商 "${provider.name}" 已禁用`, type: 'provider_disabled' },
-      }, 403)
-    }
-
-    const modelConfig = provider.models.find((m) => m.id === modelId)
-    if (!modelConfig) {
-      return c.json({
-        error: { message: `模型 "${modelId}" 未在提供商 "${provider.name}" 中配置`, type: 'invalid_request_error' },
-      }, 404)
-    }
-    if (!modelConfig.enabled) {
-      return c.json({
-        error: { message: `模型 "${modelId}" 已禁用`, type: 'model_disabled' },
-      }, 403)
-    }
-
-    const enabledKeys = provider.apiKeys.filter(k => k.enabled)
-    if (enabledKeys.length === 0) {
-      return c.json({
-        error: { message: `提供商 "${provider.name}" 未配置可用的 API Key`, type: 'configuration_error' },
-      }, 500)
-    }
-
-    const forwardBody = { ...body, model: modelId }
-    const url = new URL(c.req.url)
-    const subPath = url.pathname.replace(/^\/v1\//, '') || 'chat/completions'
-    const cleanBase = provider.baseUrl.replace(/\/$/, '')
-    const forwardUrl = `${cleanBase}/${subPath}${url.search}`
-
-    // 按健康状态排序 key：健康→洗牌，不健康→末尾，冷却到期→试用，连续失败3次→降权排除
-    const healthData = await readHealth(c.env, providerId)
-    const healthy: number[] = []
-    const unhealthy: number[] = []
-    const probation: number[] = []
-    const demoted: number[] = []
-
-    if (enabledKeys.length === 1) {
-      // 只有一个 key，跳过健康检查，直接使用
-      healthy.push(0)
-    } else {
-      for (let i = 0; i < enabledKeys.length; i++) {
-        const h = healthData[enabledKeys[i].key]
-        if (h && h.failures >= 3) {
-          // 兼容旧数据：无 demotedAt 视为现在刚降权，统一走冷却逻辑
-          if (!h.demotedAt) {
-            h.demotedAt = Date.now()
-          }
-          if (Date.now() - h.demotedAt >= KEY_HEALTH_COOLDOWN_MS) {
-            probation.push(i)  // 冷却到期，进入试用组
-          } else {
-            demoted.push(i)    // 仍在冷却，继续保持降权
-          }
-        } else if (h && h.lastFailed) {
-          unhealthy.push(i)
-        } else {
-          healthy.push(i)
-        }
-      }
-    }
-
-    // Fisher-Yates 洗牌（仅健康 key）
-    for (let i = healthy.length - 1; i > 0; i--) {
+    // 随机打乱提供商顺序
+    for (let i = candidates.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [healthy[i], healthy[j]] = [healthy[j], healthy[i]]
+      [candidates[i], candidates[j]] = [candidates[j], candidates[i]]
     }
 
-    const keyOrder = [...healthy, ...unhealthy, ...probation]
-    if (demoted.length > 0 || probation.length > 0) {
-      console.log(`[proxy] ${providerId}: ${demoted.length} key(s) demoted, ${probation.length} key(s) on probation (cooldown expired)`)
-    }
-
-    let lastError: Response | null = null
-    let healthUpdated = false
-
-    for (const keyIndex of keyOrder) {
-      const apiKey = enabledKeys[keyIndex].key
-      try {
-        const forwardHeaders: Record<string, string> = {
-          'Content-Type': 'application/json',
-        }
-        if (provider.apiType === 'anthropic') {
-          forwardHeaders['x-api-key'] = apiKey
-          forwardHeaders['anthropic-version'] = '2023-06-01'
-        } else {
-          forwardHeaders['Authorization'] = `Bearer ${apiKey}`
-        }
-
-        const response = await fetch(forwardUrl, {
-          method: c.req.method,
-          headers: forwardHeaders,
-          body: JSON.stringify(forwardBody),
-          signal: AbortSignal.timeout(60000),
-        })
-
-        if (response.ok) {
-          // 成功：重置健康状态
-          if (healthData[apiKey]?.failures > 0) {
-            delete healthData[apiKey]
-            healthUpdated = true
-          }
-          if (healthUpdated) await writeHealth(c.env, providerId, healthData)
-
-          const responseHeaders: Record<string, string> = {
-            'Content-Type': response.headers.get('Content-Type') || 'application/json',
-            'Cache-Control': 'no-store',
-          }
-          return new Response(response.body, {
-            status: response.status,
-            headers: responseHeaders,
-          })
-        }
-
-        // 401/403/429/5xx 尝试下一个 key（标记失败）
-        if (response.status === 401 || response.status === 403 || response.status === 429 || response.status >= 500) {
-          const h = healthData[apiKey] || { failures: 0, lastFailed: false }
-          h.failures++
-          h.lastFailed = true
-          if (h.failures >= 3) {
-            // 429: 使用上游返回的 Retry-After 作为精确冷却时间
-            if (response.status === 429) {
-              const retryAfterMs = parseRetryAfterMs(response)
-              h.demotedAt = Date.now() - KEY_HEALTH_COOLDOWN_MS + (retryAfterMs ?? KEY_HEALTH_COOLDOWN_MS)
-            } else {
-              h.demotedAt = Date.now()  // 达到降权阈值或试用失败，重置冷却计时
-            }
-          }
-          healthData[apiKey] = h
-          healthUpdated = true
-          lastError = response
-          continue
-        }
-
-        // 其他错误（400/404 等）直接返回
-        const errorData = await response.json().catch(async () => ({ error: { message: await response.text() } }))
-        return c.json(errorData, response.status as Parameters<typeof c.json>[1])
-      } catch (err) {
-        const error = err as Error
-        // 网络错误也标记为失败
-        const h = healthData[apiKey] || { failures: 0, lastFailed: false }
-        h.failures++
-        h.lastFailed = true
-        if (h.failures >= 3) {
-          h.demotedAt = Date.now()  // 达到降权阈值或试用失败，重置冷却计时
-        }
-        healthData[apiKey] = h
-        healthUpdated = true
-        lastError = new Response(JSON.stringify({
-          error: { message: error.message || '请求失败', type: 'proxy_error' },
-        }), { status: 502 })
-        continue
-      }
-    }
-
-    // 写回健康状态
-    if (healthUpdated) await writeHealth(c.env, providerId, healthData)
-
-    // 所有 key 均失败 → 检查是否全部降权，自动暂停 provider
-    if (lastError) {
-      if (healthUpdated) {
-        const demotedCount = enabledKeys.filter(k => {
-          const h = healthData[k.key]
-          return h && h.failures >= 3
-        }).length
-        if (demotedCount >= enabledKeys.length && enabledKeys.length > 0) {
-          await autoPauseProvider(c.env, providerId, `所有 Key 已降权: HTTP ${lastError.status || 502}`)
-        }
-      }
-      const errorBody = await lastError.text().catch(() => '所有 API Key 均失败')
-      return c.json({
-        error: {
-          message: `所有 API Key 已用完，最后一次错误: HTTP ${lastError.status}`,
-          type: 'key_exhausted',
-          detail: errorBody.substring(0, 500),
-        },
-      }, (lastError.status || 502) as Parameters<typeof c.json>[1])
+    let lastName = ''
+    for (const candidate of candidates) {
+      const provider = await getProvider(c.env, candidate.id)
+      if (!provider || !provider.enabled) continue
+      lastName = provider.name
+      const result = await tryProvider(c, provider, modelId, forwardBody)
+      if (result) return result
     }
 
     return c.json({
-      error: { message: '没有可用的 API Key', type: 'configuration_error' },
-    }, 500)
+      error: { message: lastName ? `所有提供商（如 "${lastName}"）的 Key 均不可用` : '没有可用的提供商', type: 'key_exhausted' },
+    }, 502)
   } catch (err) {
     const error = err as Error
     return c.json({
@@ -344,32 +199,193 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
   }
 }
 
-/** 处理 /v1/models — 返回所有已启用的模型（含提供商前缀） */
+/**
+ * 尝试用某个提供商转发请求。成功返回 Response，失败返回 null。
+ * 内部包含单提供商内多个 Key 的自动容灾。
+ */
+async function tryProvider(
+  c: Context<{ Bindings: Env }>,
+  provider: Provider,
+  modelId: string,
+  forwardBody: ProxyRequestBody,
+): Promise<Response | null> {
+  const enabledKeys = provider.apiKeys.filter(k => k.enabled)
+  if (enabledKeys.length === 0) return null
+
+  const url = new URL(c.req.url)
+  const subPath = url.pathname.replace(/^\/v1\//, '') || 'chat/completions'
+  const forwardUrls = buildEndpointUrls(provider.baseUrl, subPath, url.search)
+
+  // 按健康状态排序 key
+  const healthData = await readHealth(c.env, provider.id)
+  const healthy: number[] = []
+  const unhealthy: number[] = []
+  const probation: number[] = []
+  const demoted: number[] = []
+
+  if (enabledKeys.length === 1) {
+    healthy.push(0)
+  } else {
+    for (let i = 0; i < enabledKeys.length; i++) {
+      const h = healthData[enabledKeys[i].key]
+      if (h && h.failures >= 3) {
+        if (!h.demotedAt) h.demotedAt = Date.now()
+        if (Date.now() - h.demotedAt >= KEY_HEALTH_COOLDOWN_MS) {
+          probation.push(i)
+        } else {
+          demoted.push(i)
+        }
+      } else if (h && h.lastFailed) {
+        unhealthy.push(i)
+      } else {
+        healthy.push(i)
+      }
+    }
+  }
+
+  // 洗牌
+  for (let i = healthy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [healthy[i], healthy[j]] = [healthy[j], healthy[i]]
+  }
+
+  const keyOrder = [...healthy, ...unhealthy, ...probation]
+  let lastError: Response | null = null
+  let healthUpdated = false
+
+  for (const keyIndex of keyOrder) {
+    const apiKey = enabledKeys[keyIndex].key
+    try {
+      const forwardHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      }
+      if (provider.apiType === 'anthropic') {
+        forwardHeaders['x-api-key'] = apiKey
+        forwardHeaders['anthropic-version'] = '2023-06-01'
+      } else {
+        forwardHeaders['Authorization'] = `Bearer ${apiKey}`
+      }
+
+      let response: Response | null = null
+      for (let i = 0; i < forwardUrls.length; i++) {
+        const current = await fetch(forwardUrls[i], {
+          method: c.req.method,
+          headers: forwardHeaders,
+          body: JSON.stringify(forwardBody),
+          signal: AbortSignal.timeout(60000),
+        })
+
+        if (current.status === 404 && i < forwardUrls.length - 1) {
+          response = current
+          continue
+        }
+
+        response = current
+        break
+      }
+
+      if (!response) continue
+
+      if (response.ok) {
+        if (healthData[apiKey]?.failures > 0) {
+          delete healthData[apiKey]
+          healthUpdated = true
+        }
+        if (healthUpdated) await writeHealth(c.env, provider.id, healthData)
+
+        const responseHeaders: Record<string, string> = {
+          'Content-Type': response.headers.get('Content-Type') || 'application/json',
+          'Cache-Control': 'no-store',
+        }
+        return new Response(response.body, {
+          status: response.status,
+          headers: responseHeaders,
+        })
+      }
+
+      if (response.status === 401 || response.status === 403 || response.status === 429 || response.status >= 500) {
+        const h = healthData[apiKey] || { failures: 0, lastFailed: false }
+        h.failures++
+        h.lastFailed = true
+        if (h.failures >= 3) {
+          if (response.status === 429) {
+            const retryAfterMs = parseRetryAfterMs(response)
+            h.demotedAt = Date.now() - KEY_HEALTH_COOLDOWN_MS + (retryAfterMs ?? KEY_HEALTH_COOLDOWN_MS)
+          } else {
+            h.demotedAt = Date.now()
+          }
+        }
+        healthData[apiKey] = h
+        healthUpdated = true
+        lastError = response
+        continue
+      }
+
+      const errorData = await response.json().catch(async () => ({ error: { message: await response.text() } }))
+      return c.json(errorData, response.status as Parameters<typeof c.json>[1])
+    } catch (err) {
+      const error = err as Error
+      const h = healthData[apiKey] || { failures: 0, lastFailed: false }
+      h.failures++
+      h.lastFailed = true
+      if (h.failures >= 3) {
+        h.demotedAt = Date.now()
+      }
+      healthData[apiKey] = h
+      healthUpdated = true
+      lastError = new Response(JSON.stringify({
+        error: { message: error.message || '请求失败', type: 'proxy_error' },
+      }), { status: 502 })
+      continue
+    }
+  }
+
+  if (healthUpdated) await writeHealth(c.env, provider.id, healthData)
+
+  // 全部 Key 降权 → 自动暂停
+  if (healthUpdated) {
+    const demotedCount = enabledKeys.filter(k => {
+      const h = healthData[k.key]
+      return h && h.failures >= 3
+    }).length
+    if (demotedCount >= enabledKeys.length && enabledKeys.length > 0) {
+      await autoPauseProvider(c.env, provider.id, `所有 Key 已降权: HTTP ${lastError?.status || 502}`)
+    }
+  }
+
+  return null
+}
+
+/** 处理 /v1/models — 返回去重后的模型名（无提供商前缀） */
 export async function handleModels(c: Context<{ Bindings: Env }>) {
   const providers = await getProviders(c.env)
 
+  // 按模型名聚合，一个模型名对应多个提供商
+  const modelMap = new Map<string, string[]>()
+  for (const provider of providers) {
+    if (!provider.enabled) continue
+    for (const model of provider.models) {
+      if (!model.enabled) continue
+      const list = modelMap.get(model.id) || []
+      list.push(provider.name)
+      modelMap.set(model.id, list)
+    }
+  }
+
   const models: Array<{
     id: string
-    provider: string
-    provider_name: string
     object: string
     created: number
     owned_by: string
   }> = []
 
-  for (const provider of providers) {
-    if (!provider.enabled) continue
-    for (const model of provider.models) {
-      if (!model.enabled) continue
-      models.push({
-        id: `${provider.id}/${model.id}`,
-        provider: provider.id,
-        provider_name: provider.name,
-        object: 'model',
-        created: Math.floor(Date.now() / 1000),
-        owned_by: provider.id,
-      })
-    }
+  for (const [modelId, providerNames] of modelMap) {
+    models.push({
+      id: modelId,
+      object: 'model',
+      created: Math.floor(Date.now() / 1000),
+      owned_by: providerNames.join(', '),
+    })
   }
 
   return c.json({

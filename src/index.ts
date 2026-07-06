@@ -10,6 +10,7 @@ import {
   handleCreateProvider,
   handleUpdateProvider,
   handleDeleteProvider,
+  handleProbeProvider,
   handleTestModel,
   handleImportSub2Api,
   handleGetProviderHealth,
@@ -68,6 +69,7 @@ app.get('/admin/api/providers', handleGetProviders)
 app.post('/admin/api/providers', handleCreateProvider)
 app.put('/admin/api/providers/:id', handleUpdateProvider)
 app.delete('/admin/api/providers/:id', handleDeleteProvider)
+app.post('/admin/api/providers/probe', handleProbeProvider)
 app.post('/admin/api/providers/:id/test-model', handleTestModel)
 app.post('/admin/api/providers/import-sub2api', handleImportSub2Api)
 app.get('/admin/api/providers/health', handleGetProviderHealth)

@@ -13,7 +13,7 @@ import {
   updateProxyKey,
   deleteProxyKey,
 } from './storage'
-import { testModelConnection } from './proxy'
+import { buildEndpointUrls, testModelConnection } from './proxy'
 import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS } from './config'
 import type {
   Env,
@@ -40,6 +40,86 @@ function normalizeArray<T>(
     return (items as string[]).map(mapFn)
   }
   return items as T[]
+}
+
+type ProviderProbeRequest = {
+  baseUrl?: string
+  apiKey?: string
+  apiType?: 'openai' | 'anthropic'
+  modelId?: string
+}
+
+async function readProviderError(response: Response): Promise<string> {
+  try {
+    const data = await response.json() as { error?: { message?: string }, message?: string }
+    return data?.error?.message || data?.message || JSON.stringify(data)
+  } catch {
+    return await response.text()
+  }
+}
+
+async function fetchProviderModels(
+  baseUrl: string,
+  apiKey: string,
+  apiType?: 'openai' | 'anthropic'
+): Promise<{ success: boolean; message: string; statusCode?: number; models?: string[] }> {
+  const headers: Record<string, string> = {}
+  if (apiType === 'anthropic') {
+    headers['x-api-key'] = apiKey
+    headers['anthropic-version'] = '2023-06-01'
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`
+  }
+
+  const urls = buildEndpointUrls(baseUrl, 'models')
+  let lastResponse: Response | null = null
+
+  try {
+    for (let i = 0; i < urls.length; i++) {
+      const response = await fetch(urls[i], {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(15000),
+      })
+
+      if (response.status === 404 && i < urls.length - 1) {
+        lastResponse = response
+        continue
+      }
+
+      lastResponse = response
+      break
+    }
+  } catch (err) {
+    const error = err as Error
+    return { success: false, message: `连接失败: ${error.message?.substring(0, 200) || '未知错误'}` }
+  }
+
+  const response = lastResponse
+  if (!response) {
+    return { success: false, message: '无响应' }
+  }
+
+  if (!response.ok) {
+    const errorBody = await readProviderError(response)
+    return {
+      success: false,
+      message: `HTTP ${response.status}: ${errorBody.substring(0, 200)}`,
+      statusCode: response.status,
+    }
+  }
+
+  const data = await response.json().catch(() => null) as { data?: Array<{ id?: string }> } | null
+  const models = Array.isArray(data?.data)
+    ? data.data.map(m => m.id).filter((id): id is string => !!id)
+    : []
+
+  return {
+    success: true,
+    message: '连接成功',
+    statusCode: response.status,
+    models,
+  }
 }
 
 export async function handleStatus(c: Context<{ Bindings: Env }>) {
@@ -137,6 +217,23 @@ export async function handleDeleteProvider(c: Context<{ Bindings: Env }>) {
     return c.json<ApiResponse>({ success: false, message: '提供商不存在' }, 404)
   }
   return c.json<ApiResponse>({ success: true, message: '提供商已删除' })
+}
+
+export async function handleProbeProvider(c: Context<{ Bindings: Env }>) {
+  const body = await c.req.json<ProviderProbeRequest>()
+  const baseUrl = body.baseUrl?.trim().replace(/\/$/, '')
+  const apiKey = body.apiKey?.trim()
+  const apiType = body.apiType || 'openai'
+
+  if (!baseUrl || !apiKey) {
+    return c.json<ApiResponse>({ success: false, message: 'baseUrl 和 apiKey 为必填项' }, 400)
+  }
+
+  const result = body.modelId
+    ? await testModelConnection(baseUrl, apiKey, body.modelId, apiType)
+    : await fetchProviderModels(baseUrl, apiKey, apiType)
+
+  return c.json<ApiResponse>({ success: true, data: result })
 }
 
 export async function handleTestModel(c: Context<{ Bindings: Env }>) {

@@ -593,32 +593,33 @@ function testNewAKey(btn) {
   const url = document.getElementById('aurl').value.trim()
   if (!url) { toast('请先填写 API 地址', 'error'); return }
   const apiType = document.getElementById('afmt').value
-  const testUrl = url.replace(/\\/$/, '') + '/models'
-  const headers = apiType === 'anthropic'
-    ? { 'x-api-key': k, 'anthropic-version': '2023-06-01' }
-    : { 'Authorization': 'Bearer ' + k }
   const tr = document.getElementById('atestR')
   tr.innerHTML = '<span class="mu"><i class="fas fa-spinner fa-spin"></i> 测试中...</span>'
-  fetch(testUrl, { method: 'GET', headers }).then(async r => {
-    if (r.ok) {
+  fetch('/admin/api/providers/probe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ baseUrl: url, apiKey: k, apiType })
+  }).then(async r => {
+    const d = await r.json()
+    const result = d.data || {}
+    if (d.success && result.success) {
       try {
-        const d = await r.json()
-        const models = d.data || []
+        const models = result.models || []
         const h = models.map(m =>
           '<div class="mdl-item">' +
           '<i class="fas fa-cube"></i>' +
-          '<span class="fx1 cp ov" onclick="copyText(\\'' + m.id + '\\',this)">' + m.id + '</span>' +
-          '<button class="btn btn-gh btn-xs mdl-add-btn" onclick="addMdlToForm(\\'' + m.id + '\\')" title="添加到表单">+</button></div>'
+          '<span class="fx1 cp ov" onclick="copyText(\\'' + m + '\\',this)">' + m + '</span>' +
+          '<button class="btn btn-gh btn-xs mdl-add-btn" onclick="addMdlToForm(\\'' + m + '\\')" title="添加到表单">+</button></div>'
         ).join('')
         document.getElementById('amcl').innerHTML = h
           ? '<div class="grid-2-gap6">' + h + '</div>'
           : '<span class="mu">未返回模型列表</span>'
         document.getElementById('amc').classList.remove('hd')
       } catch (e) {}
-      tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功</div>'
+      tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
     } else {
       document.getElementById('amc').classList.add('hd')
-      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> HTTP ' + r.status + '</div>'
+      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
     }
     setTimeout(() => tr.innerHTML = '', 5000)
   }).catch(() => {
@@ -653,20 +654,18 @@ function testNewMdl(btn) {
   const akeys = document.querySelectorAll('#akeys .aki')
   const apiKey = Array.from(akeys).map(inp => inp.value.trim()).filter(Boolean)[0] || 'dummy'
   const apiType = document.getElementById('afmt').value
-  const testUrl = url.replace(/\\/$/, '') + '/' + (apiType === 'anthropic' ? 'messages' : 'chat/completions')
-  const headers = apiType === 'anthropic'
-    ? { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
-    : { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey }
   const tr = document.getElementById('atestR')
   tr.innerHTML = '<span class="mu"><i class="fas fa-spinner fa-spin"></i> 测试中...</span>'
-  fetch(testUrl, {
+  fetch('/admin/api/providers/probe', {
     method: 'POST',
-    headers,
-    body: JSON.stringify({ model: mid, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 })
-  }).then(r => {
-    tr.innerHTML = r.ok
-      ? '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功</div>'
-      : '<div class="al al-e"><i class="fas fa-times-circle"></i> HTTP ' + r.status + '</div>'
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ baseUrl: url, apiKey, apiType, modelId: mid })
+  }).then(async r => {
+    const d = await r.json()
+    const result = d.data || {}
+    tr.innerHTML = d.success && result.success
+      ? '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
+      : '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
     setTimeout(() => tr.innerHTML = '', 5000)
   }).catch(() => {
     tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
@@ -738,17 +737,19 @@ async function testKeyRow(id, idx) {
   const url = document.getElementById('url-' + id).value.trim()
   if (!k) { toast('请输入 API Key', 'error'); return }
   const apiType = document.getElementById('at-' + id).value
-  const testUrl = url.replace(/\\/$/, '') + '/models'
-  const headers = apiType === 'anthropic'
-    ? { 'x-api-key': k, 'anthropic-version': '2023-06-01' }
-    : { 'Authorization': 'Bearer ' + k }
   const tr = document.getElementById('tr-' + id)
   tr.innerHTML = '<span class="mu"><i class="fas fa-spinner fa-spin"></i> 测试中...</span>'
   try {
-    const r = await fetch(testUrl, { method: 'GET', headers })
-    tr.innerHTML = r.ok
-      ? '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功</div>'
-      : '<div class="al al-e"><i class="fas fa-times-circle"></i> HTTP ' + r.status + '</div>'
+    const r = await fetch('/admin/api/providers/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: url, apiKey: k, apiType })
+    })
+    const d = await r.json()
+    const result = d.data || {}
+    tr.innerHTML = d.success && result.success
+      ? '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
+      : '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
     setTimeout(() => tr.innerHTML = '', 5000)
   } catch (e) {
     tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
