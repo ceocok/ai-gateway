@@ -122,16 +122,30 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
     }
 
     const parsed = parseModelId(model)
-    if (!parsed) {
-      return c.json({
-        error: {
-          message: `模型格式错误 "${model}"，请使用 提供商ID/模型ID 格式`,
-          type: 'invalid_request_error',
-        },
-      }, 400)
+    let providerId: string
+    let modelId: string
+
+    if (parsed) {
+      providerId = parsed.providerId
+      modelId = parsed.modelId
+    } else {
+      // 无提供商前缀：搜索所有已启用提供商
+      modelId = model
+      const allProviders = await getProviders(c.env)
+      const found = allProviders.find(p =>
+        p.enabled && p.models.some(m => m.id === modelId && m.enabled)
+      )
+      if (!found) {
+        return c.json({
+          error: {
+            message: `模型 "${model}" 不存在于任何已启用的提供商中，请使用 提供商ID/模型ID 格式`,
+            type: 'invalid_request_error',
+          },
+        }, 404)
+      }
+      providerId = found.id
     }
 
-    const { providerId, modelId } = parsed
     const provider = await getProvider(c.env, providerId)
 
     if (!provider) {

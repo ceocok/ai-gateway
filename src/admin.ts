@@ -193,9 +193,20 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
   }
 
   const existing = await getProviders(c.env)
-  const existingIds = new Set(existing.map(p => p.id))
-  const imported: Provider[] = []
+  // 以 baseUrl 为 key 建立索引，方便按地址合并
+  const existingByUrl = new Map<string, Provider>()
+  for (const p of existing) {
+    const key = p.baseUrl.replace(/\/$/, '').toLowerCase()
+    // 如果 key 已存在则跳过，优先保留先出现的
+    if (!existingByUrl.has(key)) {
+      existingByUrl.set(key, p)
+    }
+  }
+
+  const imported: Array<{ id: string; name: string; models: number; merged: boolean }> = []
   const skipped: Array<{ name: string; reason: string }> = []
+  // 本次导入中按 baseUrl 暂存待合并的 key/models
+  const batchMerge = new Map<string, { provider: Provider; apiKeys: string[]; modelIds: Set<string> }>()
 
   for (const acct of rawAccounts) {
     // 只导入 apikey 类型
@@ -205,7 +216,7 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
     }
 
     const name = acct.name?.trim() || 'imported'
-    const baseUrl = acct.credentials?.base_url?.replace(/\/$/, '') || ''
+    const baseUrl = (acct.credentials?.base_url || '').replace(/\/$/, '')
     const apiKey = acct.credentials?.api_key || ''
     const modelMapping = acct.credentials?.model_mapping || {}
 
@@ -214,52 +225,98 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
       continue
     }
 
-    // 生成唯一 ID
-    let id = name
-      .toLowerCase()
+    const urlKey = baseUrl.toLowerCase()
+    const models = Object.keys(modelMapping)
+
+    // 1) 检查是否与已有提供商 baseUrl 相同 → 合并
+    const existingProvider = existingByUrl.get(urlKey)
+    if (existingProvider) {
+      // 追加 API Key（去重）
+      const keyExists = existingProvider.apiKeys.some(k => k.key === apiKey)
+      if (!keyExists) {
+        existingProvider.apiKeys.push({ key: apiKey, enabled: true })
+      }
+      // 追加模型（去重）
+      for (const mid of models) {
+        if (!existingProvider.models.some(m => m.id === mid)) {
+          existingProvider.models.push({ id: mid, enabled: true })
+        }
+      }
+      await updateProvider(c.env, existingProvider.id, {
+        apiKeys: existingProvider.apiKeys,
+        models: existingProvider.models,
+      })
+      imported.push({ id: existingProvider.id, name: existingProvider.name, models: models.length, merged: true })
+      continue
+    }
+
+    // 2) 检查本次导入中是否已有相同 baseUrl → 暂存合并
+    const batchEntry = batchMerge.get(urlKey)
+    if (batchEntry) {
+      if (!batchEntry.apiKeys.includes(apiKey)) {
+        batchEntry.apiKeys.push(apiKey)
+      }
+      for (const mid of models) {
+        batchEntry.modelIds.add(mid)
+      }
+      imported.push({ id: batchEntry.provider.id, name: name, models: models.length, merged: true })
+      continue
+    }
+
+    // 3) 新提供商——从 baseUrl 主机名生成 ID
+    let id = baseUrl
       .replace(/^https?:\/\//, '')
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-')
+      .replace(/\/.*$/, '')
+      .replace(/^www\./, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .substring(0, 48) || 'imported'
 
-    // 处理 ID 冲突（与已有提供商 + 本次导入的其他账户）
-    if (existingIds.has(id)) {
+    // 检查 ID 冲突（已有提供商 + 本次已创建的 batch 条目）
+    const allCreatedIds = new Set(existing.map(p => p.id))
+    for (const [, entry] of batchMerge) {
+      allCreatedIds.add(entry.provider.id)
+    }
+    if (allCreatedIds.has(id)) {
       let suffix = 1
-      while (existingIds.has(`${id}-${suffix}`)) suffix++
+      while (allCreatedIds.has(`${id}-${suffix}`)) suffix++
       id = `${id}-${suffix}`
     }
-    existingIds.add(id)
 
     const now = new Date().toISOString()
-    const models: Array<{ id: string; enabled: boolean }> = Object.keys(modelMapping).map(mid => ({
-      id: mid,
-      enabled: true,
-    }))
-
     const provider: Provider = {
       id,
       name,
       baseUrl,
       apiType: acct.platform === 'anthropic' ? 'anthropic' : 'openai',
       apiKeys: [{ key: apiKey, enabled: true }],
-      models,
+      models: models.map(mid => ({ id: mid, enabled: true })),
       enabled: true,
       createdAt: now,
       updatedAt: now,
     }
 
-    await addProvider(c.env, provider)
-    imported.push(provider)
+    batchMerge.set(urlKey, { provider, apiKeys: [apiKey], modelIds: new Set(models) })
+    imported.push({ id: provider.id, name: provider.name, models: models.length, merged: false })
+  }
+
+  // 批量写入暂存的合并条目
+  for (const [, entry] of batchMerge) {
+    // 合并 batch 内的重复模型
+    entry.provider.models = Array.from(entry.modelIds).map(mid => ({ id: mid, enabled: true }))
+    await addProvider(c.env, entry.provider)
   }
 
   return c.json<ApiResponse>({
     success: true,
     data: {
-      imported: imported.map(p => ({ id: p.id, name: p.name, models: p.models.length })),
+      imported,
       skipped,
       total: imported.length,
+      merged: imported.filter(i => i.merged).length,
     },
-    message: `成功导入 ${imported.length} 个提供商${skipped.length ? `，${skipped.length} 个跳过` : ''}`,
+    message: `成功导入 ${imported.length} 个账号${imported.filter(i=>i.merged).length ? `（${imported.filter(i=>i.merged).length} 个合并到已有提供商）` : ''}${skipped.length ? `，${skipped.length} 个跳过` : ''}`,
   })
 }
 
