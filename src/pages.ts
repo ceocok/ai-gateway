@@ -316,6 +316,10 @@ async function l() {
 export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
   const providers = await getProviders(c.env)
   const proxyKeys = await getProxyKeys(c.env)
+  const enabledProviders = providers.filter(p => p.enabled).length
+  const totalModels = providers.reduce((sum, p) => sum + p.models.length, 0)
+  const enabledModels = providers.reduce((sum, p) => sum + p.models.filter(m => m.enabled).length, 0)
+  const enabledProxyKeys = proxyKeys.filter(k => k.enabled).length
 
   return c.html(`<!DOCTYPE html><html lang="zh-CN">
 ${H('管理')}
@@ -325,19 +329,39 @@ ${H('管理')}
   <div class="nav"><a href="/" class="btn btn-gh"><i class="fas fa-home"></i>首页</a><a href="/admin/logout" class="btn btn-gh"><i class="fas fa-sign-out-alt"></i>退出</a></div>
 </div></hd>
 
-<main class="ct" style="padding:14px 16px;">
+<main class="ct admin-shell">
 <div id="toast" class="hd toast"></div>
 
+<section class="admin-hero">
+  <div class="hero-panel">
+    <p class="eyebrow">Gateway Control</p>
+    <h2>模型路由控制台</h2>
+    <div class="hero-meta">
+      <span><i class="fas fa-server"></i> ${enabledProviders}/${providers.length} 提供商在线</span>
+      <span><i class="fas fa-cube"></i> ${enabledModels}/${totalModels} 模型启用</span>
+      <code>/v1</code>
+    </div>
+  </div>
+  <div class="metric-grid">
+    <div class="metric"><i class="fas fa-server"></i><strong>${providers.length}</strong><span>提供商</span></div>
+    <div class="metric"><i class="fas fa-bolt"></i><strong>${enabledProviders}</strong><span>在线</span></div>
+    <div class="metric"><i class="fas fa-cubes"></i><strong>${totalModels}</strong><span>模型</span></div>
+    <div class="metric"><i class="fas fa-key"></i><strong>${enabledProxyKeys}</strong><span>转发 Key</span></div>
+  </div>
+</section>
+
 <!-- 提供商 -->
-<div class="card" style="margin-top:10px;">
+<div class="card provider-board">
   <div class="card-hd">
     <h2><i class="fas fa-server"></i>提供商</h2>
-    <button class="btn btn-p btn-xs" onclick="showAdd()"><i class="fas fa-plus"></i> 添加</button>
-    <button class="btn btn-gh btn-xs" onclick="showImport()"><i class="fas fa-file-import"></i> 导入 sub2api</button>
+    <div class="board-actions">
+      <button class="btn btn-p btn-xs" onclick="showAdd()"><i class="fas fa-plus"></i> 添加</button>
+      <button class="btn btn-gh btn-xs" onclick="showImport()"><i class="fas fa-file-import"></i> 导入 sub2api</button>
+    </div>
   </div>
 
   <!-- 添加表单 -->
-  <div style="display:flex;gap:12px;margin-bottom:12px;">
+  <div class="add-form-wrap">
   <div id="af" class="hd add-form-panel">
     <h3 class="fs-88 mb-10"><i class="fas fa-plus-circle c-p"></i> 添加新提供商</h3>
     <div class="fr">
@@ -406,7 +430,15 @@ ${H('管理')}
       <div class="ps" onclick="tog('${p.id}')">
         <div class="l">
           <i class="fas fa-chevron-right c-l fs-65" style="transition:transform .12s;" id="ch-${p.id}"></i>
-          <div><h3>${p.name} <span id="hb-${p.id}"></span></h3>
+          <div>
+            <div class="provider-title-row">
+              <h3 class="provider-name">${p.name}</h3>
+              <span id="hb-${p.id}"></span>
+              <div class="provider-metrics">
+                <span><i class="fas fa-key"></i>${p.apiKeys.filter(k => k.enabled).length}/${p.apiKeys.length}</span>
+                <span><i class="fas fa-cube"></i>${p.models.filter(m => m.enabled).length}/${p.models.length}</span>
+              </div>
+            </div>
             <div class="pu"><i class="fas fa-link"></i>
               <span class="ov">${p.baseUrl}</span>
               <i class="fas fa-copy cp" onclick="event.stopPropagation();copyText('${p.baseUrl}',this)"></i>
