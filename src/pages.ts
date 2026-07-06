@@ -51,39 +51,35 @@ ${renderHeader(isLoggedIn, true)}
 
 <main class="ct" style="padding:28px 20px;">
 
-  <!-- Stats + API -->
-  <div class="sg" style="margin-bottom:18px;">
-    <div class="card" style="flex:1.2;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-        <div style="width:36px;height:36px;border-radius:8px;background:var(--primary-bg);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-          <i class="fas fa-cubes" style="color:var(--primary);font-size:0.85rem;"></i>
-        </div>
-        <div>
-          <h2 style="font-size:0.95rem;font-weight:700;">模型广场</h2>
-          <p style="font-size:0.72rem;color:var(--text-muted);margin-top:1px;">${SITE_CONFIG.subtitle}</p>
-        </div>
+  <!-- Hero Bar -->
+  <div class="hero-bar" style="margin-bottom:20px;">
+    <div class="hero-bar-main">
+      <div class="hero-bar-icon">
+        <i class="fas fa-cubes"></i>
       </div>
-      <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(63,63,70,0.3);">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:0.76rem;color:var(--text-light);">API 接口：</span>
-          <code class="cd">https://${host}/v1</code>
-          <i class="fas fa-copy cp" style="font-size:0.65rem;color:var(--text-muted);cursor:pointer;" onclick='copyText("https://${host}/v1",this)'></i>
-          <span style="font-size:0.76rem;color:var(--text-muted);margin-left:4px;">模型格式：<code style="background:rgba(39,39,42,0.4);padding:1px 5px;border-radius:3px;font-size:0.72rem;">提供商ID/模型ID</code></span>
-        </div>
+      <div>
+        <div class="hero-bar-title">模型广场</div>
+        <div class="hero-bar-sub">${SITE_CONFIG.subtitle}</div>
+      </div>
+      <div class="hero-bar-spacer"></div>
+      <div class="hero-bar-api">
+        <span class="hero-bar-label">API</span>
+        <code class="cd" style="font-size:0.8rem;">https://${host}/v1</code>
+        <i class="fas fa-copy cp" style="font-size:0.7rem;color:var(--text-muted);cursor:pointer;" onclick='copyText("https://${host}/v1",this)'></i>
+        <span class="hero-bar-fmt">格式：<code style="background:rgba(39,39,42,0.4);padding:1px 5px;border-radius:3px;font-size:0.7rem;">提供商ID/模型ID</code></span>
       </div>
     </div>
-    <div class="card" style="flex:1;padding:16px;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;height:100%;align-content:center;">
-        <div>
-          <span style="font-size:0.68rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;letter-spacing:0.04em;">提供商</span>
-          <div style="font-size:1.5rem;font-weight:800;color:var(--zinc-100);font-variant-numeric:tabular-nums;margin-top:2px;">${providers.length}</div>
-          <span style="font-size:0.72rem;color:var(--success);"><i class="fas fa-check-circle"></i> ${providers.filter(p=>p.enabled).length} 在线</span>
-        </div>
-        <div>
-          <span style="font-size:0.68rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;letter-spacing:0.04em;">模型</span>
-          <div style="font-size:1.5rem;font-weight:800;color:var(--zinc-100);font-variant-numeric:tabular-nums;margin-top:2px;">${providers.reduce((s,p)=>s+p.models.length,0)}</div>
-          <span style="font-size:0.72rem;color:var(--success);"><i class="fas fa-check-circle"></i> ${providers.filter(p=>p.enabled).reduce((s,p)=>s+p.models.filter(m=>m.enabled).length,0)} 可用</span>
-        </div>
+    <div class="hero-bar-stats">
+      <div class="hero-bar-stat">
+        <span class="hero-bar-stat-label">提供商</span>
+        <span class="hero-bar-stat-val">${providers.length}</span>
+        <span class="hero-bar-stat-sub"><i class="fas fa-check-circle" style="color:var(--success);"></i> ${providers.filter(p=>p.enabled).length} 在线</span>
+      </div>
+      <div class="hero-bar-stat-divider"></div>
+      <div class="hero-bar-stat">
+        <span class="hero-bar-stat-label">模型</span>
+        <span class="hero-bar-stat-val">${providers.reduce((s,p)=>s+p.models.length,0)}</span>
+        <span class="hero-bar-stat-sub"><i class="fas fa-check-circle" style="color:var(--success);"></i> ${providers.filter(p=>p.enabled).reduce((s,p)=>s+p.models.filter(m=>m.enabled).length,0)} 可用</span>
       </div>
     </div>
   </div>
@@ -282,7 +278,7 @@ ${renderHeader(true, false)}
   </div>
 
   <!-- Provider List -->
-  <div class="gp">
+  <div class="pg">
     ${providers.map((p, pi) => `
     <div class="pi" data-id="${p.id}">
       <div class="ps" onclick="tog('${p.id}')">
@@ -369,11 +365,12 @@ ${renderHeader(true, false)}
   </div>
   <div style="padding:4px 20px 20px;">
     ${proxyKeys.length
-      ? `<div style="border-bottom:1px solid rgba(63,63,70,0.3);padding-bottom:8px;margin-bottom:4px;display:flex;justify-content:space-between;font-size:0.68rem;color:var(--text-muted);text-transform:uppercase;font-weight:700;letter-spacing:0.04em;">
-          <span style="flex:1;">Key</span>
-          <span style="width:80px;text-align:center;">名称</span>
-          <span style="width:70px;text-align:center;">状态</span>
-          <span style="width:50px;"></span>
+      ? `<div class="proxy-key-header">
+          <span class="proxy-key-header-key">Key</span>
+          <span class="proxy-key-header-name">名称</span>
+          <span class="proxy-key-header-status">状态</span>
+          <span class="proxy-key-header-toggle"></span>
+          <span class="proxy-key-header-del"></span>
         </div>`
       : ''
     }
@@ -386,18 +383,18 @@ ${renderHeader(true, false)}
           </span>
           <i class="fas fa-copy cp" style="font-size:0.7rem;color:var(--text-muted);cursor:pointer;" onclick='copyText("${escHtml(pk.key)}",this)'></i>
         </div>
-        <div style="width:80px;text-align:center;font-size:0.76rem;color:var(--text-muted);">${pk.name || '-'}</div>
-        <div class="fc" style="width:70px;justify-content:center;">
+        <div class="ki-name">${pk.name || '-'}</div>
+        <div class="ki-status">
           <span class="bd ${pk.enabled ? 'bd-on' : 'bd-off'}">${pk.enabled ? '已启用' : '已禁用'}</span>
         </div>
-        <div style="width:50px;text-align:right;">
-          <label class="tg" style="vertical-align:middle;">
+        <div class="ki-toggle">
+          <label class="tg">
             <input type="checkbox" ${pk.enabled ? 'checked' : ''} onchange="toggleProxyKey('${pk.id}', this.checked)">
             <span class="sl"></span>
           </label>
         </div>
-        <div style="width:36px;text-align:right;">
-          <button class="btn btn-gh btn-xs" onclick="rmKey('${pk.id}')" title="删除"><i class="fas fa-trash c-muted"></i></button>
+        <div class="ki-del">
+          <button class="btn btn-gh btn-xs" onclick="rmKey('${pk.id}')" title="删除"><i class="fas fa-trash" style="color:var(--text-muted);"></i></button>
         </div>
       </div>
       `).join('')
