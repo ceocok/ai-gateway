@@ -277,30 +277,43 @@ ${renderHeader(true, false)}
     </div>
   </div>
 
-  <!-- Provider List -->
-  <div class="pg">
-    ${providers.map((p, pi) => `
-    <div class="pi" data-id="${p.id}">
-      <div class="ps" onclick="tog('${p.id}')">
-        <div class="l">
-          <i class="fas fa-fw ${p.enabled ? 'fa-server' : 'fa-server'}"></i>
-          <div>
-            <div class="provider-title-row">
-              <span class="provider-name">${p.name}</span>
-              <span class="provider-metrics">
-                <span id="hb-${p.id}"><span class="bd ${p.enabled ? 'bd-on' : 'bd-off'}">${p.enabled ? '<i class="fas fa-check-circle"></i> 已启用' : '<i class="fas fa-ban"></i> 已禁用'}</span></span>
-              </span>
-            </div>
-            <div class="pu">
-              ${p.baseUrl.replace(/^https?:\/\//, '')}
-              <i class="fas fa-cube" style="margin-left:6px;"></i> ${p.models.length} 模型
+  <!-- Provider Workbench -->
+  <div class="provider-workbench">
+    <div class="provider-list" aria-label="提供商列表">
+      ${providers.length ? providers.map((p, pi) => `
+      <div class="pi ${pi === 0 ? 'selected' : ''}" data-id="${p.id}">
+        <div class="ps" onclick="selectProvider('${p.id}')">
+          <div class="l">
+            <i class="fas fa-fw fa-server"></i>
+            <div>
+              <div class="provider-title-row">
+                <span class="provider-name">${p.name}</span>
+                <span class="provider-metrics">
+                  <span id="hb-${p.id}"><span class="bd ${p.enabled ? 'bd-on' : 'bd-off'}">${p.enabled ? '<i class="fas fa-check-circle"></i> 已启用' : '<i class="fas fa-ban"></i> 已禁用'}</span></span>
+                </span>
+              </div>
+              <div class="pu">
+                <span>${p.baseUrl.replace(/^https?:\/\//, '')}</span>
+                <i class="fas fa-cube"></i> ${p.models.length} 模型
+              </div>
             </div>
           </div>
+          <i class="fas fa-chevron-right" id="ch-${p.id}"></i>
         </div>
-        <i class="fas fa-chevron-right" id="ch-${p.id}" style="color:var(--text-muted);font-size:0.7rem;transition:transform 0.15s ease;flex-shrink:0;"></i>
       </div>
-      <div class="pd" id="dt-${p.id}">
-        <input type="hidden" id="at-${p.id}" value="${p.apiType || 'openai'}">
+      `).join('') : `<div class="provider-empty"><i class="fas fa-server"></i><span>暂无提供商，点击右上角「添加」创建</span></div>`}
+    </div>
+
+    <div class="provider-detail-pane">
+      ${providers.length ? providers.map((p, pi) => `
+      <div class="pd ${pi === 0 ? 'open' : ''}" id="dt-${p.id}">
+        <div class="detail-panel-head">
+          <div>
+            <p class="detail-eyebrow">Provider Details</p>
+            <h3>${p.name}</h3>
+          </div>
+          <span class="bd ${p.enabled ? 'bd-on' : 'bd-off'}">${p.enabled ? '<i class="fas fa-check-circle"></i> 已启用' : '<i class="fas fa-ban"></i> 已禁用'}</span>
+        </div>
         <div class="fr">
           <div class="fg"><label>名称</label><input type="text" id="nm-${p.id}" value="${escHtml(p.name)}"></div>
           <div class="fg"><label>API 地址</label><input type="url" id="url-${p.id}" value="${p.baseUrl}"></div>
@@ -345,13 +358,13 @@ ${renderHeader(true, false)}
         </div>
         <div id="hs-${p.id}"></div>
         <div id="tr-${p.id}" style="margin-top:4px;"></div>
-        <div class="fa">
+        <div class="fa detail-actions">
           <button class="btn btn-p btn-sm" onclick="save('${p.id}')"><i class="fas fa-save"></i> 保存</button>
           <button class="btn btn-d btn-sm" onclick="del('${p.id}')"><i class="fas fa-trash"></i> 删除</button>
         </div>
       </div>
+      `).join('') : `<div class="provider-detail-empty"><i class="fas fa-arrow-left"></i><span>先创建一个提供商，再在这里编辑详细配置。</span></div>`}
     </div>
-    `).join('')}
   </div>
 </div>
 
@@ -452,12 +465,15 @@ function toast(msg, t) {
   setTimeout(function() { el.classList.add('hd') }, 3500)
 }
 
-// ── Provider accordion ──
-function tog(id) {
-  const d = document.getElementById('dt-' + id)
-  const c = document.getElementById('ch-' + id)
-  const isOpen = d.classList.toggle('open')
-  c.style.transform = isOpen ? 'rotate(90deg)' : 'rotate(0deg)'
+// ── Provider master/detail selection ──
+function selectProvider(id) {
+  document.querySelectorAll('.provider-list .pi').forEach(function(item) {
+    const active = item.dataset.id === id
+    item.classList.toggle('selected', active)
+  })
+  document.querySelectorAll('.provider-detail-pane .pd').forEach(function(panel) {
+    panel.classList.toggle('open', panel.id === 'dt-' + id)
+  })
 }
 
 // ── Add form show/hide ──
