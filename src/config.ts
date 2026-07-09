@@ -24,6 +24,8 @@ export const KV_KEYS = {
   SESSION_PREFIX: 'admin:session:',
   KEY_HEALTH_PREFIX: 'key:health:',
   PROVIDER_HEALTH_PREFIX: 'provider:health:',
+  CALL_STATUS_PREFIX: 'call:status:',
+  CALL_STATUS_RECENT: 'call:status:recent',
 } as const
 
 // 有效期选项（秒）

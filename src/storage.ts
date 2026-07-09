@@ -1,5 +1,8 @@
 import { KV_KEYS } from './config'
-import type { Env, Provider, ProviderHealth, ProxyKey, Session } from './types'
+import type { CallStatusRecord, Env, Provider, ProviderHealth, ProxyKey, Session } from './types'
+
+const CALL_STATUS_LIMIT = 30
+const CALL_STATUS_TTL_SECONDS = 60 * 60 * 2
 
 // ===== 提供商 CRUD =====
 
@@ -96,6 +99,62 @@ export async function recoverProvider(env: Env, providerId: string): Promise<boo
   // 重新启用
   await updateProvider(env, providerId, { enabled: true })
   return true
+}
+
+// ===== 实时调用状态 =====
+
+function callStatusKey(id: string): string {
+  return KV_KEYS.CALL_STATUS_PREFIX + id
+}
+
+export async function recordCallStart(env: Env, record: CallStatusRecord): Promise<void> {
+  await env.KV.put(callStatusKey(record.id), JSON.stringify(record), {
+    expirationTtl: CALL_STATUS_TTL_SECONDS,
+  })
+
+  const raw = await env.KV.get(KV_KEYS.CALL_STATUS_RECENT)
+  const ids = raw ? JSON.parse(raw) as string[] : []
+  const next = [record.id, ...ids.filter(id => id !== record.id)].slice(0, CALL_STATUS_LIMIT)
+  await env.KV.put(KV_KEYS.CALL_STATUS_RECENT, JSON.stringify(next), {
+    expirationTtl: CALL_STATUS_TTL_SECONDS,
+  })
+}
+
+export async function recordCallEnd(
+  env: Env,
+  id: string,
+  updates: Pick<CallStatusRecord, 'status' | 'statusCode'> & Partial<Pick<CallStatusRecord, 'error'>>
+): Promise<void> {
+  const raw = await env.KV.get(callStatusKey(id))
+  if (!raw) return
+
+  const record = JSON.parse(raw) as CallStatusRecord
+  const endedAt = new Date()
+  const startedAt = new Date(record.startedAt).getTime()
+  const next: CallStatusRecord = {
+    ...record,
+    ...updates,
+    endedAt: endedAt.toISOString(),
+    updatedAt: endedAt.toISOString(),
+    durationMs: Math.max(0, endedAt.getTime() - startedAt),
+  }
+
+  await env.KV.put(callStatusKey(id), JSON.stringify(next), {
+    expirationTtl: CALL_STATUS_TTL_SECONDS,
+  })
+}
+
+export async function getRecentCallStatuses(env: Env): Promise<CallStatusRecord[]> {
+  const raw = await env.KV.get(KV_KEYS.CALL_STATUS_RECENT)
+  const ids = raw ? JSON.parse(raw) as string[] : []
+  const records = await Promise.all(ids.map(async (id) => {
+    const item = await env.KV.get(callStatusKey(id))
+    return item ? JSON.parse(item) as CallStatusRecord : null
+  }))
+
+  return records
+    .filter((item): item is CallStatusRecord => item !== null)
+    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
 }
 // ===== Session 管理 =====
 

@@ -87,6 +87,28 @@ export interface ProviderHealth {
   }
 }
 
+export type CallStatusState = 'running' | 'success' | 'error'
+
+export interface CallStatusRecord {
+  id: string
+  status: CallStatusState
+  providerId: string
+  providerName: string
+  modelId: string
+  requestedModel: string
+  apiType: 'openai' | 'anthropic'
+  path: string
+  method: string
+  stream: boolean
+  keyHint: string
+  startedAt: string
+  updatedAt: string
+  endedAt?: string
+  durationMs?: number
+  statusCode?: number
+  error?: string
+}
+
 export interface Env {
   KV: KVNamespace
   ADMIN_USERNAME?: string

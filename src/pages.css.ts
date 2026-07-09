@@ -979,6 +979,193 @@ footer a:hover {
   letter-spacing: 0.02em;
 }
 
+/* ── Live Call Monitor ── */
+
+.call-monitor {
+  padding: 0;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.call-monitor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(63,63,70,0.35);
+  background: rgba(24,24,27,0.62);
+}
+
+.call-monitor-head h2 {
+  font-size: 0.95rem;
+  color: var(--zinc-100);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.call-monitor-head h2 i {
+  color: var(--primary);
+  font-size: 0.78rem;
+}
+
+.call-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid rgba(63,63,70,0.3);
+}
+
+.call-stat {
+  padding: 10px 16px;
+  border-right: 1px solid rgba(63,63,70,0.25);
+}
+
+.call-stat:last-child {
+  border-right: none;
+}
+
+.call-stat span {
+  display: block;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 800;
+}
+
+.call-stat strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 1.15rem;
+  color: var(--zinc-100);
+  font-variant-numeric: tabular-nums;
+}
+
+.call-rows {
+  display: grid;
+  gap: 1px;
+  background: rgba(63,63,70,0.22);
+  max-height: 270px;
+  overflow-y: auto;
+}
+
+.call-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(420px, 1.5fr);
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  background: rgba(24,24,27,0.78);
+  border-left: 3px solid transparent;
+}
+
+.call-row.running { border-left-color: var(--warning); }
+.call-row.success { border-left-color: var(--success); }
+.call-row.error { border-left-color: var(--danger); }
+
+.call-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.call-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 66px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.call-badge.running {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.call-badge.success {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.call-badge.error {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.call-model {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.call-model strong,
+.call-model span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-model strong {
+  font-size: 0.78rem;
+  color: var(--zinc-100);
+}
+
+.call-model span {
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.call-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-width: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.call-row-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.call-row-meta i {
+  color: var(--zinc-600);
+  font-size: 0.65rem;
+}
+
+.call-error {
+  grid-column: 1 / -1;
+  color: var(--danger-text);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-empty {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(24,24,27,0.78);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
 /* ── Provider Board ── */
 
 .provider-board {
@@ -1009,7 +1196,7 @@ footer a:hover {
 .provider-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1082,7 +1269,7 @@ footer a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 6px 10px;
   cursor: pointer;
   background: rgba(24,24,27,0.5);
   border-left: 3px solid transparent;
@@ -1116,39 +1303,60 @@ footer a:hover {
 .ps .l {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   flex: 1;
 }
 
 .ps .l > i:first-child {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border-radius: 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: rgba(39,39,42,0.6);
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: 0.66rem;
   flex-shrink: 0;
 }
 
 .provider-title-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
+.provider-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--zinc-600);
+}
+
+.provider-dot.on {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(16,185,129,0.1);
+}
+
+.provider-dot.off {
+  background: var(--zinc-600);
+}
+
 .provider-name {
-  font-size: 0.88rem !important;
+  font-size: 0.8rem !important;
   font-weight: 700 !important;
   color: var(--zinc-100);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
 }
 
 .provider-metrics {
-  display: inline-flex;
+  display: none;
   align-items: center;
   gap: 4px;
   color: var(--text-muted);
@@ -1168,15 +1376,15 @@ footer a:hover {
 
 .ps .l .pu {
   margin-top: 2px;
-  font-size: 0.74rem;
+  font-size: 0.66rem;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 320px;
+  max-width: 210px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 7px;
 }
 
 .ps > i:last-child {
@@ -1530,6 +1738,12 @@ footer a:hover {
   .admin-hero {
     grid-template-columns: 1fr;
   }
+  .call-row {
+    grid-template-columns: 1fr;
+  }
+  .call-row-meta {
+    justify-content: flex-start;
+  }
   .add-form-wrap {
     grid-template-columns: 1fr;
   }
@@ -1574,6 +1788,15 @@ footer a:hover {
   }
   .metric-grid {
     grid-template-columns: 1fr 1fr;
+  }
+  .call-stat-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .call-monitor-head {
+    padding: 14px 16px;
+  }
+  .call-row {
+    padding: 9px 12px;
   }
   .metric {
     min-height: 100px;
@@ -1659,6 +1882,15 @@ footer a:hover {
   .metric-grid {
     grid-template-columns: 1fr 1fr;
     gap: 6px;
+  }
+  .call-stat {
+    padding: 9px 12px;
+  }
+  .call-row-main {
+    align-items: flex-start;
+  }
+  .call-badge {
+    min-width: 58px;
   }
   .metric {
     min-height: 80px;

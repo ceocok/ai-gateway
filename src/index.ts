@@ -15,6 +15,7 @@ import {
   handleImportSub2Api,
   handleGetProviderHealth,
   handleRecoverProvider,
+  handleGetCallStatuses,
   handleGetProxyKeys,
   handleCreateProxyKey,
   handleUpdateProxyKey,
@@ -74,6 +75,7 @@ app.post('/admin/api/providers/:id/test-model', handleTestModel)
 app.post('/admin/api/providers/import-sub2api', handleImportSub2Api)
 app.get('/admin/api/providers/health', handleGetProviderHealth)
 app.post('/admin/api/providers/:id/recover', handleRecoverProvider)
+app.get('/admin/api/calls/status', handleGetCallStatuses)
 
 // 转发 Key 管理
 app.get('/admin/api/proxy-keys', handleGetProxyKeys)

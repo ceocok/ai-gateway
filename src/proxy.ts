@@ -1,7 +1,7 @@
 import { Context } from 'hono'
-import { getProvider, getProviders, autoPauseProvider } from './storage'
+import { getProvider, getProviders, autoPauseProvider, recordCallEnd, recordCallStart } from './storage'
 import { KV_KEYS, KEY_HEALTH_COOLDOWN_MS } from './config'
-import type { Env, Provider, ProxyRequestBody } from './types'
+import type { CallStatusRecord, Env, Provider, ProxyRequestBody } from './types'
 
 // ===== Key 健康状态类型和辅助函数 =====
 
@@ -50,6 +50,66 @@ function parseModelId(model: string): { providerId: string; modelId: string } | 
     providerId: model.substring(0, slashIndex),
     modelId: model.substring(slashIndex + 1),
   }
+}
+
+function maskKey(key: string): string {
+  if (!key) return '-'
+  return key.length > 8 ? `****${key.slice(-4)}` : '****'
+}
+
+function createCallRecord(
+  c: Context<{ Bindings: Env }>,
+  provider: Provider,
+  apiKey: string,
+  modelId: string,
+  requestedModel: string,
+  forwardBody: ProxyRequestBody
+): CallStatusRecord {
+  const now = new Date().toISOString()
+  const url = new URL(c.req.url)
+  return {
+    id: crypto.randomUUID(),
+    status: 'running',
+    providerId: provider.id,
+    providerName: provider.name,
+    modelId,
+    requestedModel,
+    apiType: provider.apiType || 'openai',
+    path: `${url.pathname}${url.search}`,
+    method: c.req.method,
+    stream: forwardBody.stream === true,
+    keyHint: maskKey(apiKey),
+    startedAt: now,
+    updatedAt: now,
+  }
+}
+
+function monitorResponseBody(
+  body: ReadableStream<Uint8Array>,
+  onFinish: (status: 'success' | 'error', error?: string) => Promise<void>
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader()
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          await onFinish('success')
+          controller.close()
+          return
+        }
+        controller.enqueue(value)
+      } catch (err) {
+        const error = err as Error
+        await onFinish('error', error.message || '响应流读取失败')
+        controller.error(err)
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => {})
+      await onFinish('error', '客户端取消请求')
+    },
+  })
 }
 
 export function buildEndpointUrls(baseUrl: string, subPath: string, search = ''): string[] {
@@ -155,7 +215,7 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
         return c.json({ error: { message: `提供商 "${parsed.providerId}" 不存在`, type: 'invalid_request_error' } }, 404)
       }
       forwardBody.model = parsed.modelId
-      const result = await tryProvider(c, provider, parsed.modelId, forwardBody)
+      const result = await tryProvider(c, provider, parsed.modelId, model, forwardBody)
       if (result) return result
       return c.json({ error: { message: `提供商 "${provider.name}" 的所有 Key 均不可用`, type: 'key_exhausted' } }, 502)
     }
@@ -184,7 +244,7 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
       const provider = await getProvider(c.env, candidate.id)
       if (!provider || !provider.enabled) continue
       lastName = provider.name
-      const result = await tryProvider(c, provider, modelId, forwardBody)
+      const result = await tryProvider(c, provider, modelId, model, forwardBody)
       if (result) return result
     }
 
@@ -207,6 +267,7 @@ async function tryProvider(
   c: Context<{ Bindings: Env }>,
   provider: Provider,
   modelId: string,
+  requestedModel: string,
   forwardBody: ProxyRequestBody,
 ): Promise<Response | null> {
   const enabledKeys = provider.apiKeys.filter(k => k.enabled)
@@ -255,6 +316,15 @@ async function tryProvider(
 
   for (const keyIndex of keyOrder) {
     const apiKey = enabledKeys[keyIndex].key
+    const callRecord = createCallRecord(c, provider, apiKey, modelId, requestedModel, forwardBody)
+    await recordCallStart(c.env, callRecord).catch(() => {})
+    let callClosed = false
+    const finishCall = async (status: 'success' | 'error', statusCode?: number, error?: string) => {
+      if (callClosed) return
+      callClosed = true
+      await recordCallEnd(c.env, callRecord.id, { status, statusCode, error }).catch(() => {})
+    }
+
     try {
       const forwardHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -284,7 +354,10 @@ async function tryProvider(
         break
       }
 
-      if (!response) continue
+      if (!response) {
+        await finishCall('error', 502, '上游无响应')
+        continue
+      }
 
       if (response.ok) {
         if (healthData[apiKey]?.failures > 0) {
@@ -297,7 +370,19 @@ async function tryProvider(
           'Content-Type': response.headers.get('Content-Type') || 'application/json',
           'Cache-Control': 'no-store',
         }
-        return new Response(response.body, {
+
+        if (!response.body) {
+          await finishCall('success', response.status)
+          return new Response(null, {
+            status: response.status,
+            headers: responseHeaders,
+          })
+        }
+
+        const monitoredBody = monitorResponseBody(response.body, async (status, error) => {
+          await finishCall(status, status === 'success' ? response.status : 499, error)
+        })
+        return new Response(monitoredBody, {
           status: response.status,
           headers: responseHeaders,
         })
@@ -318,10 +403,12 @@ async function tryProvider(
         healthData[apiKey] = h
         healthUpdated = true
         lastError = response
+        await finishCall('error', response.status, `HTTP ${response.status}`)
         continue
       }
 
       const errorData = await response.json().catch(async () => ({ error: { message: await response.text() } }))
+      await finishCall('error', response.status, `HTTP ${response.status}`)
       return c.json(errorData, response.status as Parameters<typeof c.json>[1])
     } catch (err) {
       const error = err as Error
@@ -336,6 +423,7 @@ async function tryProvider(
       lastError = new Response(JSON.stringify({
         error: { message: error.message || '请求失败', type: 'proxy_error' },
       }), { status: 502 })
+      await finishCall('error', 502, error.message || '请求失败')
       continue
     }
   }

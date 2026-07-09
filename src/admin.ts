@@ -7,6 +7,7 @@ import {
   deleteProvider,
   getProviderHealth,
   getAllProviderHealth,
+  getRecentCallStatuses,
   recoverProvider,
   getProxyKeys,
   addProxyKey,
@@ -488,6 +489,31 @@ export async function handleRecoverProvider(c: Context<{ Bindings: Env }>) {
     success: false,
     data: result,
     message: `恢复失败: ${result.message}`,
+  })
+}
+
+// ===== 实时调用状态 =====
+
+export async function handleGetCallStatuses(c: Context<{ Bindings: Env }>) {
+  const records = await getRecentCallStatuses(c.env)
+  const activeCutoff = Date.now() - 10 * 60 * 1000
+  const active = records.filter(item =>
+    item.status === 'running' && new Date(item.startedAt).getTime() >= activeCutoff
+  ).length
+  const recent = records.slice(0, 20)
+  const success = recent.filter(item => item.status === 'success').length
+  const errors = recent.filter(item => item.status === 'error').length
+
+  return c.json<ApiResponse>({
+    success: true,
+    data: {
+      active,
+      success,
+      errors,
+      total: recent.length,
+      updatedAt: new Date().toISOString(),
+      records: recent,
+    },
   })
 }
 

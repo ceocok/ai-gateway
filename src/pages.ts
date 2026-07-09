@@ -216,6 +216,26 @@ ${renderHeader(true, false)}
   </div>
 </section>
 
+<!-- Calls Monitor -->
+<section class="card call-monitor">
+  <div class="call-monitor-head">
+    <div>
+      <p class="eyebrow">Live Calls</p>
+      <h2><i class="fas fa-signal"></i> 实时调用状态</h2>
+    </div>
+    <button class="btn btn-gh btn-xs" onclick="loadCallStatus()"><i class="fas fa-sync"></i> 刷新</button>
+  </div>
+  <div class="call-stat-grid">
+    <div class="call-stat"><span>运行中</span><strong id="cs-active">0</strong></div>
+    <div class="call-stat"><span>成功</span><strong id="cs-success">0</strong></div>
+    <div class="call-stat"><span>失败</span><strong id="cs-errors">0</strong></div>
+    <div class="call-stat"><span>最近</span><strong id="cs-total">0</strong></div>
+  </div>
+  <div id="callRows" class="call-rows">
+    <div class="call-empty"><i class="fas fa-circle-notch fa-spin"></i> 正在加载调用状态...</div>
+  </div>
+</section>
+
 <!-- Providers -->
 <div class="card provider-board">
   <div class="card-hd">
@@ -287,14 +307,15 @@ ${renderHeader(true, false)}
             <i class="fas fa-fw fa-server"></i>
             <div>
               <div class="provider-title-row">
+                <span class="provider-dot ${p.enabled ? 'on' : 'off'}"></span>
                 <span class="provider-name">${p.name}</span>
                 <span class="provider-metrics">
                   <span id="hb-${p.id}"><span class="bd ${p.enabled ? 'bd-on' : 'bd-off'}">${p.enabled ? '<i class="fas fa-check-circle"></i> 已启用' : '<i class="fas fa-ban"></i> 已禁用'}</span></span>
                 </span>
               </div>
               <div class="pu">
-                <span>${p.baseUrl.replace(/^https?:\/\//, '')}</span>
-                <i class="fas fa-cube"></i> ${p.models.length} 模型
+                <span>${p.models.length} 模型</span>
+                <span>${(p.apiType || 'openai') === 'anthropic' ? 'Anthropic' : 'OpenAI'}</span>
               </div>
             </div>
           </div>
@@ -744,6 +765,10 @@ async function togglePb(id, checked) {
   if (!pi) return
   var b = pi.querySelector('.ps .bd')
   if (b) { b.textContent = checked ? '已启用' : '已禁用'; b.className = 'bd ' + (checked ? 'bd-on' : 'bd-off') }
+  var dot = pi.querySelector('.provider-dot')
+  if (dot) { dot.className = 'provider-dot ' + (checked ? 'on' : 'off') }
+  var panelBadge = document.querySelector('#dt-' + id + ' .detail-panel-head .bd')
+  if (panelBadge) { panelBadge.innerHTML = checked ? '<i class="fas fa-check-circle"></i> 已启用' : '<i class="fas fa-ban"></i> 已禁用'; panelBadge.className = 'bd ' + (checked ? 'bd-on' : 'bd-off') }
   var r = await fetch('/admin/api/providers/' + encodeURIComponent(id), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -859,6 +884,69 @@ async function doImportSub2Api() {
   }
 }
 
+// ── Live call monitor ──
+function fmtMs(ms) {
+  if (ms === null || ms === undefined) return '-'
+  if (ms < 1000) return ms + 'ms'
+  return (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + 's'
+}
+
+function fmtClock(iso) {
+  if (!iso) return '-'
+  try {
+    return new Date(iso).toLocaleTimeString('zh-CN', { hour12: false })
+  } catch (e) {
+    return '-'
+  }
+}
+
+function renderCallStatusBadge(status) {
+  if (status === 'running') return '<span class="call-badge running"><i class="fas fa-circle-notch fa-spin"></i> 运行中</span>'
+  if (status === 'success') return '<span class="call-badge success"><i class="fas fa-check-circle"></i> 成功</span>'
+  return '<span class="call-badge error"><i class="fas fa-times-circle"></i> 失败</span>'
+}
+
+async function loadCallStatus() {
+  var rows = document.getElementById('callRows')
+  try {
+    var r = await fetch('/admin/api/calls/status')
+    var d = await r.json()
+    if (!d.success || !d.data) return
+    document.getElementById('cs-active').textContent = d.data.active || 0
+    document.getElementById('cs-success').textContent = d.data.success || 0
+    document.getElementById('cs-errors').textContent = d.data.errors || 0
+    document.getElementById('cs-total').textContent = d.data.total || 0
+
+    var records = d.data.records || []
+    if (!records.length) {
+      rows.innerHTML = '<div class="call-empty"><i class="fas fa-satellite-dish"></i> 暂无调用，发起 /v1 请求后会显示在这里</div>'
+      return
+    }
+
+    rows.innerHTML = records.map(function(item) {
+      var statusCode = item.statusCode ? 'HTTP ' + item.statusCode : '-'
+      var duration = item.status === 'running' ? fmtMs(Date.now() - new Date(item.startedAt).getTime()) : fmtMs(item.durationMs)
+      var err = item.error ? '<span class="call-error" title="' + escHtml(item.error) + '">' + escHtml(item.error) + '</span>' : ''
+      return '<div class="call-row ' + item.status + '">' +
+        '<div class="call-row-main">' +
+          renderCallStatusBadge(item.status) +
+          '<div class="call-model"><strong>' + escHtml(item.providerName) + '</strong><span>' + escHtml(item.modelId) + '</span></div>' +
+        '</div>' +
+        '<div class="call-row-meta">' +
+          '<span><i class="fas fa-clock"></i> ' + duration + '</span>' +
+          '<span><i class="fas fa-code"></i> ' + statusCode + '</span>' +
+          '<span><i class="fas fa-key"></i> ' + escHtml(item.keyHint || '-') + '</span>' +
+          '<span><i class="fas fa-wave-square"></i> ' + (item.stream ? 'stream' : 'normal') + '</span>' +
+          '<span>' + fmtClock(item.startedAt) + '</span>' +
+        '</div>' +
+        err +
+      '</div>'
+    }).join('')
+  } catch (e) {
+    rows.innerHTML = '<div class="call-empty"><i class="fas fa-exclamation-circle"></i> 调用状态加载失败</div>'
+  }
+}
+
 // ── Health ──
 async function loadHealth() {
   try {
@@ -932,6 +1020,8 @@ function copyText(t, el) {
 
 // ── Init ──
 loadHealth()
+loadCallStatus()
+setInterval(loadCallStatus, 1500)
 </script>
 </body></html>`)
 }
