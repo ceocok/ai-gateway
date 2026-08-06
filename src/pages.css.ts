@@ -1458,8 +1458,8 @@ footer a:hover {
 }
 
 .provider-editor-modal {
-  width: min(760px, 100%);
-  max-width: 760px;
+  width: min(1520px, 100%);
+  max-width: 1520px;
   max-height: calc(100vh - 48px);
   padding: 0;
   overflow: hidden;
