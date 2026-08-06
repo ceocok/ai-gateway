@@ -419,7 +419,11 @@ async function tryProvider(
 
       if (response.status === 401 || response.status === 402 || response.status === 403 || response.status === 429 || response.status >= 500) {
         const errorBody = await readUpstreamError(response)
-        if (isUsageExhausted(response.status, errorBody)) {
+        const usageExhausted = isUsageExhausted(response.status, errorBody)
+        if (response.status >= 500) {
+          // 5xx（尤其 503）表示上游服务瞬时不可用，与 Key 有效性无关。
+          // 不累计 Key 失败次数，避免短暂故障把所有 Key 降权并自动暂停提供商。
+        } else if (usageExhausted) {
           await disableProviderKey(c.env, provider.id, apiKey).catch(() => {})
           delete healthData[apiKey]
         } else {
@@ -436,7 +440,8 @@ async function tryProvider(
           }
           healthData[apiKey] = h
         }
-        healthUpdated = true
+        // 只有实际修改了 Key 健康状态才写回并参与自动暂停判断。
+        if (usageExhausted || response.status < 500) healthUpdated = true
         lastError = response
         await finishCall('error', response.status, `HTTP ${response.status}`)
         continue

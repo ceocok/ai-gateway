@@ -6,6 +6,8 @@ import {
   updateProvider,
   deleteProvider,
   getProviderHealth,
+  clearProviderHealth,
+  clearProviderKeyHealth,
   getAllProviderHealth,
   getRecentCallStatuses,
   recoverProvider,
@@ -222,12 +224,13 @@ export async function handleUpdateProvider(c: Context<{ Bindings: Env }>) {
   const id = c.req.param('id')
   if (!id) return c.json<ApiResponse>({ success: false, message: '缺少 id 参数' }, 400)
   const body = await c.req.json<UpdateProviderRequest>()
+  const existingHealth = await getProviderHealth(c.env, id)
 
   const updates: Partial<Provider> = {}
   if (body.name !== undefined) updates.name = body.name
   if (body.baseUrl !== undefined) updates.baseUrl = body.baseUrl.replace(/\/$/, '')
   if (body.apiType !== undefined) updates.apiType = body.apiType
-if (body.apiKeys !== undefined) {
+  if (body.apiKeys !== undefined) {
     updates.apiKeys = normalizeArray(body.apiKeys, (k) => ({ key: k, enabled: true }))
   }
   if (body.enabled !== undefined) updates.enabled = body.enabled
@@ -238,6 +241,13 @@ if (body.apiKeys !== undefined) {
   const updated = await updateProvider(c.env, id, updates)
   if (!updated) {
     return c.json<ApiResponse>({ success: false, message: '提供商不存在' }, 404)
+  }
+
+  // 手动重新启用自动暂停的提供商时，旧的 503/网络失败记录不能继续影响路由。
+  // 只清除临时健康状态，不改动 Key 的 enabled 配置。
+  if (body.enabled === true) {
+    await clearProviderKeyHealth(c.env, id)
+    if (existingHealth?.autoPaused) await clearProviderHealth(c.env, id)
   }
 
   return c.json<ApiResponse<Provider>>({ success: true, data: updated })
@@ -446,14 +456,16 @@ export async function handleGetProviderHealth(c: Context<{ Bindings: Env }>) {
   // 同时读取 key 级健康数据
   const data = await Promise.all(providers.map(async (p) => {
     const h = healthMap[p.id] || null
-    let keyStats = { total: 0, healthy: 0, demoted: 0 }
+    let keyStats = { total: p.apiKeys.filter(k => k.enabled).length, healthy: p.apiKeys.filter(k => k.enabled).length, demoted: 0 }
     let demotedKeys = 0
     try {
       const raw = await c.env.KV.get('key:health:' + p.id)
       if (raw) {
-        const kh = JSON.parse(raw)
-        const keys = Object.values(kh) as Array<{ failures: number }>
-        keyStats.total = p.apiKeys.filter(k => k.enabled).length
+        const kh = JSON.parse(raw) as Record<string, { failures: number }>
+        const enabledKeySet = new Set(p.apiKeys.filter(k => k.enabled).map(k => k.key))
+        const keys = Object.entries(kh)
+          .filter(([key]) => enabledKeySet.has(key))
+          .map(([, value]) => value)
         keyStats.demoted = keys.filter(k => k.failures >= 3).length
         keyStats.healthy = keyStats.total - keys.filter(k => k.failures >= 1).length
         demotedKeys = keyStats.demoted
@@ -480,34 +492,57 @@ export async function handleRecoverProvider(c: Context<{ Bindings: Env }>) {
     return c.json<ApiResponse>({ success: false, message: '提供商不存在' }, 404)
   }
 
-  // 找第一个可用的 API Key 和模型测试
+  // 尝试所有启用 Key；自动暂停通常由短暂的 503 触发，不能只测试第一个 Key。
   const enabledKeys = provider.apiKeys.filter(k => k.enabled)
   if (enabledKeys.length === 0) {
     return c.json<ApiResponse>({ success: false, message: '该提供商没有可用的 API Key' }, 400)
   }
 
   const enabledModels = provider.models.filter(m => m.enabled)
-  if (enabledModels.length === 0) {
-    return c.json<ApiResponse>({ success: false, message: '该提供商没有启用的模型' }, 400)
+
+  let lastResult: { success: boolean; message: string; statusCode?: number } = { success: false, message: '未完成连接测试' }
+  let allAttemptsTransient = true
+  const markAttempt = (result: { success: boolean; message: string; statusCode?: number }) => {
+    lastResult = result
+    // 404 可能只是该提供商不支持某个探测端点；5xx/429/网络错误也不说明 Key 无效。
+    const status = result.statusCode
+    if (status !== undefined && status !== 404 && status !== 408 && status !== 409 && status !== 425 && status !== 429 && status < 500) {
+      allAttemptsTransient = false
+    }
+  }
+  for (const key of enabledKeys) {
+    // 优先使用 /models 验证 Key，避免某个模型暂时不可用导致恢复失败。
+    const modelsResult = await fetchProviderModels(provider.baseUrl, key.key, provider.apiType)
+    markAttempt(modelsResult)
+    if (modelsResult.success) {
+      await recoverProvider(c.env, id)
+      return c.json<ApiResponse>({ success: true, data: modelsResult, message: `恢复成功，提供商 "${provider.name}" 已重新启用` })
+    }
+    for (const model of enabledModels) {
+      const modelResult = await testModelConnection(provider.baseUrl, key.key, model.id, provider.apiType)
+      markAttempt(modelResult)
+      if (modelResult.success) {
+        await recoverProvider(c.env, id)
+        return c.json<ApiResponse>({ success: true, data: modelResult, message: `恢复成功，提供商 "${provider.name}" 已重新启用` })
+      }
+    }
   }
 
-  const apiKey = enabledKeys[0].key
-  const modelId = enabledModels[0].id
-  const result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType)
-
-  if (result.success) {
+  // 如果所有探测都只是上游 503/429/端点暂不可用，仍然清掉旧的自动暂停状态，
+  // 让后续真实请求可以重新尝试，而不是永久卡在“恢复失败”。
+  if (allAttemptsTransient) {
     await recoverProvider(c.env, id)
     return c.json<ApiResponse>({
       success: true,
-      data: result,
-      message: `恢复成功，提供商 "${provider.name}" 已重新启用`,
+      data: lastResult,
+      message: `已清除暂停状态并重新启用；上游当前仍返回 ${lastResult.statusCode ? `HTTP ${lastResult.statusCode}` : '暂时不可用'}`,
     })
   }
 
   return c.json<ApiResponse>({
     success: false,
-    data: result,
-    message: `恢复失败: ${result.message}`,
+    data: lastResult,
+    message: `恢复失败: ${lastResult.message}`,
   })
 }
 

@@ -85,6 +85,11 @@ export async function clearProviderHealth(env: Env, providerId: string): Promise
   await env.KV.delete(KV_KEYS.PROVIDER_HEALTH_PREFIX + providerId).catch(() => {})
 }
 
+/** 清除提供商下所有 Key 的临时健康记录。Key 本身的 enabled 状态不变。 */
+export async function clearProviderKeyHealth(env: Env, providerId: string): Promise<void> {
+  await env.KV.delete(KV_KEYS.KEY_HEALTH_PREFIX + providerId).catch(() => {})
+}
+
 export async function autoPauseProvider(env: Env, providerId: string, error: string): Promise<void> {
   const provider = await getProvider(env, providerId)
   if (!provider || !provider.enabled) return
@@ -109,7 +114,7 @@ export async function recoverProvider(env: Env, providerId: string): Promise<boo
   if (!provider) return false
 
   // 清空 key 级健康记录
-  await env.KV.delete(KV_KEYS.KEY_HEALTH_PREFIX + providerId).catch(() => {})
+  await clearProviderKeyHealth(env, providerId)
   // 清空 provider 级健康记录
   await clearProviderHealth(env, providerId)
   // 重新启用

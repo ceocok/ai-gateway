@@ -183,10 +183,6 @@ async function l() {
 export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
   const providers = await getProviders(c.env)
   const proxyKeys = await getProxyKeys(c.env)
-  const requestedProviderId = c.req.query('provider')
-  const selectedProviderId = providers.some(p => p.id === requestedProviderId)
-    ? requestedProviderId
-    : providers[0]?.id
   const enabledProviders = providers.filter(p => p.enabled).length
   const totalModels = providers.reduce((sum, p) => sum + p.models.length, 0)
   const enabledModels = providers.reduce((sum, p) => sum + p.models.filter(m => m.enabled).length, 0)
@@ -308,9 +304,9 @@ ${renderHeader(true, false)}
   <!-- Provider Workbench -->
   <div class="provider-workbench">
     <div class="provider-list" aria-label="提供商列表">
-      ${providers.length ? providers.map((p, pi) => `
-      <div class="pi ${p.id === selectedProviderId ? 'selected' : ''}" data-id="${p.id}">
-        <div class="ps" onclick="selectProvider('${p.id}')">
+      ${providers.length ? providers.map(p => `
+      <div class="pi" data-id="${p.id}" onclick="selectProvider('${p.id}')">
+        <div class="ps">
           <div class="l">
             <i class="fas fa-fw fa-server"></i>
             <div>
@@ -322,20 +318,24 @@ ${renderHeader(true, false)}
                 </span>
               </div>
               <div class="pu">
-                <span>${p.models.length} 模型</span>
-                <span>${(p.apiType || 'openai') === 'anthropic' ? 'Anthropic' : 'OpenAI'}</span>
+                <span><i class="fas fa-cubes"></i> ${p.models.length} 模型</span>
+                <span><i class="fas fa-code"></i> ${(p.apiType || 'openai') === 'anthropic' ? 'Anthropic' : 'OpenAI'}</span>
               </div>
             </div>
           </div>
-          <i class="fas fa-chevron-right" id="ch-${p.id}"></i>
+          <span class="provider-edit-action"><i class="fas fa-pen"></i> 编辑</span>
+        </div>
+        <div class="provider-card-meta">
+          <span><i class="fas fa-link"></i>${escHtml(p.baseUrl)}</span>
+          <span><i class="fas fa-key"></i>${p.apiKeys.filter(k => k.enabled).length} 个可用 Key</span>
         </div>
       </div>
       `).join('') : `<div class="provider-empty"><i class="fas fa-server"></i><span>暂无提供商，点击右上角「添加」创建</span></div>`}
     </div>
 
-    <div class="provider-detail-pane">
+    <div class="provider-detail-pane" aria-hidden="true">
       ${providers.length ? providers.map((p, pi) => `
-      <div class="pd ${p.id === selectedProviderId ? 'open' : ''}" id="dt-${p.id}">
+      <div class="pd" id="dt-${p.id}" data-provider-id="${p.id}">
         <div class="detail-panel-head">
           <div>
             <p class="detail-eyebrow">Provider Details</p>
@@ -396,6 +396,7 @@ ${renderHeader(true, false)}
         <div id="tr-${p.id}" style="margin-top:4px;"></div>
         <div class="fa detail-actions">
           <button class="btn btn-p btn-sm" onclick="save('${p.id}')"><i class="fas fa-save"></i> 保存</button>
+          <button class="btn btn-gh btn-sm" onclick="closeProviderEditor()">取消</button>
           <button class="btn btn-d btn-sm" onclick="del('${p.id}')"><i class="fas fa-trash"></i> 删除</button>
         </div>
       </div>
@@ -471,11 +472,11 @@ ${renderHeader(true, false)}
 // ── Modal ──
 function showM(h) {
   const o = document.createElement('div')
-  o.className = 'modal-o'
+  o.className = 'modal-o generic-modal-overlay'
   o.innerHTML = '<div class="modal">' + h + '</div>'
   document.body.appendChild(o)
 }
-function closeM() { const o = document.querySelector('.modal-o'); if (o) o.remove() }
+function closeM() { const o = document.querySelector('.generic-modal-overlay'); if (o) o.remove() }
 
 function cM(msg) {
   return new Promise(function(resolve) {
@@ -501,24 +502,41 @@ function toast(msg, t) {
   setTimeout(function() { el.classList.add('hd') }, 3500)
 }
 
-// ── Provider master/detail selection ──
+// ── Provider editor modal ──
 function selectProvider(id) {
-  document.querySelectorAll('.provider-list .pi').forEach(function(item) {
-    const active = item.dataset.id === id
-    item.classList.toggle('selected', active)
+  const panel = document.getElementById('dt-' + id)
+  if (!panel || document.querySelector('.provider-editor-overlay')) return
+
+  const overlay = document.createElement('div')
+  overlay.className = 'modal-o provider-editor-overlay'
+  overlay.innerHTML = '<div class="modal provider-editor-modal" role="dialog" aria-modal="true" aria-labelledby="provider-editor-title">' +
+    '<div class="provider-modal-top"><div><p class="detail-eyebrow">Provider Settings</p><h2 id="provider-editor-title">编辑提供商</h2></div><button class="btn btn-gh btn-xs provider-modal-close" onclick="closeProviderEditor()" aria-label="关闭编辑"><i class="fas fa-times"></i></button></div>' +
+    '<div class="provider-editor-slot"></div></div>'
+  overlay.addEventListener('click', function(event) {
+    if (event.target === overlay) closeProviderEditor()
   })
-  document.querySelectorAll('.provider-detail-pane .pd').forEach(function(panel) {
-    panel.classList.toggle('open', panel.id === 'dt-' + id)
+  overlay.tabIndex = -1
+  overlay.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') closeProviderEditor()
   })
-  const url = new URL(window.location.href)
-  url.searchParams.set('provider', id)
-  window.history.replaceState(null, '', url)
+  document.body.appendChild(overlay)
+  overlay.focus()
+  overlay.querySelector('.provider-editor-slot').appendChild(panel)
+  panel.classList.add('open')
+  const firstInput = panel.querySelector('input')
+  if (firstInput) firstInput.focus()
 }
 
-function providerPageUrl(id) {
-  const url = new URL(window.location.href)
-  url.searchParams.set('provider', id)
-  return url.toString()
+function closeProviderEditor() {
+  const overlay = document.querySelector('.provider-editor-overlay')
+  if (!overlay) return
+  const panel = overlay.querySelector('.pd')
+  const templates = document.querySelector('.provider-detail-pane')
+  if (panel && templates) {
+    panel.classList.remove('open')
+    templates.appendChild(panel)
+  }
+  overlay.remove()
 }
 
 // ── Add form show/hide ──
@@ -1002,7 +1020,7 @@ async function save(id) {
     body: JSON.stringify({ name: nm, baseUrl: url, apiType: apiType, apiKeys: keys, models: models, enabled: enabled })
   })
   var d = await r.json()
-  if (d.success) { toast('已保存', 'success'); location.href = providerPageUrl(id) }
+  if (d.success) { closeProviderEditor(); toast('已保存', 'success'); location.reload() }
   else toast(d.message || '保存失败', 'error')
 }
 
