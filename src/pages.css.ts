@@ -1622,6 +1622,14 @@ footer a:hover {
   line-height: 1.5;
 }
 
+.model-discovery-inline {
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid rgba(63,63,70,0.45);
+  border-radius: 7px;
+  background: rgba(9,9,11,0.24);
+}
+
 .manual-model-label {
   margin-top: 10px;
 }
@@ -1669,6 +1677,17 @@ footer a:hover {
 .model-choice:hover {
   border-color: var(--primary-border);
   background: var(--primary-bg);
+}
+
+.model-choice.is-existing {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.72;
+}
+
+.model-choice.is-existing:hover {
+  border-color: var(--zinc-700);
+  background: rgba(9,9,11,0.3);
 }
 
 .model-choice input {

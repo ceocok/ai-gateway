@@ -365,7 +365,14 @@ ${renderHeader(true, false)}
           </div>
         </div>
         <div class="fg">
-          <label>模型</label>
+          <div class="model-field-head">
+            <label>模型</label>
+            <button class="btn btn-gh btn-xs" id="mdiscover-${p.id}" onclick="discoverProviderModels('${escHtml(p.id)}')">
+              <i class="fas fa-cloud-download-alt"></i> 获取模型
+            </button>
+          </div>
+          <div class="model-discovery-hint">使用当前 API 地址和 Key 读取可用模型；获取后可批量加入编辑列表。</div>
+          <div id="mp-${p.id}" class="model-discovery-inline hd"></div>
           <div id="ml-${p.id}">
             ${p.models.map((m, mi) => `
               <div data-idx="${mi}" style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:rgba(9,9,11,0.4);border:1px solid rgba(63,63,70,0.3);margin-bottom:6px;">
@@ -709,6 +716,11 @@ function getKeys(id) {
   }).filter(Boolean)
 }
 
+function getProviderProbeKey(id) {
+  const keys = document.querySelectorAll('#keys-' + id + ' input[type="text"]')
+  return Array.from(keys).map(function(inp) { return inp.value.trim() }).filter(Boolean)[0] || ''
+}
+
 function addKeyRow(id) {
   const inp = document.getElementById('nk-' + id), k = inp.value.trim()
   if (!k) { toast('请输入 API Key', 'error'); return }
@@ -755,6 +767,143 @@ async function testKeyRow(id, idx) {
 }
 
 // ── Edit provider models ──
+async function discoverProviderModels(id) {
+  const url = document.getElementById('url-' + id).value.trim()
+  const apiKey = getProviderProbeKey(id)
+  const apiType = document.getElementById('at-' + id).value
+  const button = document.getElementById('mdiscover-' + id)
+  const panel = document.getElementById('mp-' + id)
+  const tr = document.getElementById('tr-' + id)
+
+  if (!url) { toast('请先填写 API 地址', 'error'); return }
+  if (!apiKey) { toast('请先填写 API Key', 'error'); return }
+
+  button.disabled = true
+  panel.classList.remove('hd')
+  panel.innerHTML = '<div class="model-discovery-state"><i class="fas fa-circle-notch fa-spin"></i><span>正在读取提供商模型...</span></div>'
+  tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 正在连接...</span>'
+
+  try {
+    const r = await fetch('/admin/api/providers/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: url, apiKey: apiKey, apiType: apiType })
+    })
+    const d = await r.json()
+    const result = d.data || {}
+    if (d.success && result.success) {
+      renderEditDiscoveredModels(id, result.models || [])
+      tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 已读取模型' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
+    } else {
+      panel.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>未能读取模型列表，可继续手动添加。</span></div>'
+      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
+    }
+    setTimeout(function() { tr.innerHTML = '' }, 5000)
+  } catch (e) {
+    panel.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>请求失败，可继续手动添加。</span></div>'
+    tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
+    setTimeout(function() { tr.innerHTML = '' }, 5000)
+  } finally {
+    button.disabled = false
+  }
+}
+
+function renderEditDiscoveredModels(id, models) {
+  const panel = document.getElementById('mp-' + id)
+  const existing = new Set(getMdl(id).map(function(model) { return model.id }))
+  const uniqueModels = Array.from(new Set(models.filter(function(model) {
+    return typeof model === 'string' && model.trim()
+  }))).sort()
+
+  panel.dataset.models = JSON.stringify(uniqueModels)
+  panel.innerHTML = ''
+  if (uniqueModels.length === 0) {
+    panel.innerHTML = '<div class="model-discovery-state"><i class="fas fa-info-circle"></i><span>提供商未返回模型列表，可继续手动添加。</span></div>'
+    return
+  }
+
+  const toolbar = document.createElement('div')
+  toolbar.className = 'model-picker-toolbar'
+
+  const count = document.createElement('span')
+  count.innerHTML = '<strong class="edit-model-selected">0</strong> / ' + uniqueModels.length + ' 可加入'
+
+  const actions = document.createElement('div')
+  actions.className = 'model-picker-actions'
+  const selectAll = document.createElement('button')
+  selectAll.className = 'btn btn-gh btn-xs'
+  selectAll.textContent = '全选'
+  selectAll.addEventListener('click', function() { setEditDiscoveredSelection(id, true) })
+  const clearAll = document.createElement('button')
+  clearAll.className = 'btn btn-gh btn-xs'
+  clearAll.textContent = '清空'
+  clearAll.addEventListener('click', function() { setEditDiscoveredSelection(id, false) })
+  const apply = document.createElement('button')
+  apply.className = 'btn btn-p btn-xs'
+  apply.innerHTML = '<i class="fas fa-plus"></i> 加入选中'
+  apply.addEventListener('click', function() { applyEditDiscoveredModels(id) })
+  actions.appendChild(selectAll)
+  actions.appendChild(clearAll)
+  actions.appendChild(apply)
+  toolbar.appendChild(count)
+  toolbar.appendChild(actions)
+  panel.appendChild(toolbar)
+
+  const grid = document.createElement('div')
+  grid.className = 'model-picker-grid'
+  uniqueModels.forEach(function(model) {
+    const label = document.createElement('label')
+    label.className = 'model-choice' + (existing.has(model) ? ' is-existing' : '')
+    const checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    checkbox.className = 'emd'
+    checkbox.value = model
+    checkbox.disabled = existing.has(model)
+    checkbox.addEventListener('change', function() { updateEditDiscoveredCount(id) })
+    const icon = document.createElement('i')
+    icon.className = existing.has(model) ? 'fas fa-check' : 'fas fa-cube'
+    const text = document.createElement('span')
+    text.textContent = model
+    text.title = model
+    label.appendChild(checkbox)
+    label.appendChild(icon)
+    label.appendChild(text)
+    grid.appendChild(label)
+  })
+  panel.appendChild(grid)
+  updateEditDiscoveredCount(id)
+}
+
+function updateEditDiscoveredCount(id) {
+  const panel = document.getElementById('mp-' + id)
+  const count = panel.querySelectorAll('.emd:checked').length
+  const counter = panel.querySelector('.edit-model-selected')
+  if (counter) counter.textContent = String(count)
+}
+
+function setEditDiscoveredSelection(id, checked) {
+  document.querySelectorAll('#mp-' + id + ' .emd').forEach(function(input) {
+    if (!input.disabled) input.checked = checked
+  })
+  updateEditDiscoveredCount(id)
+}
+
+function applyEditDiscoveredModels(id) {
+  const selected = Array.from(document.querySelectorAll('#mp-' + id + ' .emd:checked')).map(function(input) {
+    return input.value
+  })
+  const existing = new Set(getMdl(id).map(function(model) { return model.id }))
+  const additions = selected.filter(function(model) { return !existing.has(model) })
+  if (additions.length === 0) {
+    toast('没有需要加入的新模型', 'error')
+    return
+  }
+  additions.forEach(function(model) { addMdlValue(id, model, true) })
+  toast('已加入 ' + additions.length + ' 个模型', 'success')
+  const available = JSON.parse(document.getElementById('mp-' + id).dataset.models || '[]')
+  renderEditDiscoveredModels(id, available)
+}
+
 function getMdl(id) {
   const c = document.getElementById('ml-' + id), items = c.querySelectorAll('[data-idx]')
   return Array.from(items).map(function(item) {
@@ -767,15 +916,24 @@ function getMdl(id) {
 function addMdl(id) {
   const inp = document.getElementById('nmid-' + id), mid = inp.value.trim()
   if (!mid) { toast('请输入模型 ID', 'error'); return }
-  const c = document.getElementById('ml-' + id), cnt = c.querySelectorAll('[data-idx]').length
+  addMdlValue(id, mid, true)
+  inp.value = ''
+}
+
+function addMdlValue(id, mid, enabled) {
+  const c = document.getElementById('ml-' + id)
+  const indices = Array.from(c.querySelectorAll('[data-idx]')).map(function(item) { return parseInt(item.dataset.idx) }).filter(Number.isFinite)
+  const cnt = indices.length ? Math.max.apply(null, indices) + 1 : 0
   const d = document.createElement('div')
   d.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:rgba(9,9,11,0.4);border:1px solid rgba(63,63,70,0.3);margin-bottom:6px;'
   d.dataset.idx = cnt
-  d.innerHTML = '<input type="text" value="' + mid + '" class="fx1" id="mid-' + id + '-' + cnt + '" placeholder="模型 ID" style="font-family:SF Mono,Fira Code,JetBrains Mono,monospace;font-size:0.78rem;"><label class="tg"><input type="checkbox" checked id="men-' + id + '-' + cnt + '"><span class="sl"></span></label><button class="btn btn-gh btn-xs" id="tm-' + id + '-' + cnt + '"><i class="fas fa-plug"></i></button><button class="btn btn-gh btn-xs" id="rm-' + id + '-' + cnt + '"><i class="fas fa-times c-muted"></i></button>'
+  d.innerHTML = '<input type="text" class="fx1" id="mid-' + id + '-' + cnt + '" placeholder="模型 ID" style="font-family:SF Mono,Fira Code,JetBrains Mono,monospace;font-size:0.78rem;"><label class="tg"><input type="checkbox" ' + (enabled ? 'checked' : '') + ' id="men-' + id + '-' + cnt + '"><span class="sl"></span></label><button class="btn btn-gh btn-xs" id="tm-' + id + '-' + cnt + '"><i class="fas fa-plug"></i></button><button class="btn btn-gh btn-xs" id="rm-' + id + '-' + cnt + '"><i class="fas fa-times c-muted"></i></button>'
   c.appendChild(d)
-  document.getElementById('tm-' + id + '-' + cnt).addEventListener('click', function() { testMdl(id, mid, cnt) })
+  document.getElementById('mid-' + id + '-' + cnt).value = mid
+  document.getElementById('tm-' + id + '-' + cnt).addEventListener('click', function() {
+    testMdl(id, document.getElementById('mid-' + id + '-' + cnt).value.trim(), cnt)
+  })
   document.getElementById('rm-' + id + '-' + cnt).addEventListener('click', function() { rmMdl(id, cnt) })
-  inp.value = ''
 }
 
 function rmMdl(id, idx) {
