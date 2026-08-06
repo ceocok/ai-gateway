@@ -43,6 +43,34 @@ function normalizeArray<T>(
   return items as T[]
 }
 
+function slugifyProviderId(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 48)
+}
+
+function createProviderId(baseUrl: string, name: string, usedIds: Set<string>): string {
+  let hostname = baseUrl
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/^www\./, '')
+
+  try {
+    hostname = new URL(baseUrl).hostname.replace(/^www\./, '')
+  } catch {}
+
+  const baseId = slugifyProviderId(hostname) || slugifyProviderId(name) || 'provider'
+  let id = baseId
+  let suffix = 1
+  while (usedIds.has(id)) {
+    id = `${baseId}-${suffix}`
+    suffix++
+  }
+  return id
+}
+
 type ProviderProbeRequest = {
   baseUrl?: string
   apiKey?: string
@@ -156,21 +184,25 @@ export async function handleGetProviders(c: Context<{ Bindings: Env }>) {
 
 export async function handleCreateProvider(c: Context<{ Bindings: Env }>) {
   const body = await c.req.json<CreateProviderRequest>()
+  const name = body.name?.trim()
+  const baseUrl = body.baseUrl?.trim()
 
-  if (!body.id || !body.name || !body.baseUrl) {
-    return c.json<ApiResponse>({ success: false, message: 'id、name、baseUrl 为必填项' }, 400)
+  if (!name || !baseUrl) {
+    return c.json<ApiResponse>({ success: false, message: 'name、baseUrl 为必填项' }, 400)
   }
 
   const providers = await getProviders(c.env)
-  if (providers.some((p) => p.id === body.id)) {
-    return c.json<ApiResponse>({ success: false, message: `提供商 id "${body.id}" 已存在` }, 409)
+  const requestedId = body.id?.trim()
+  if (requestedId && providers.some((p) => p.id === requestedId)) {
+    return c.json<ApiResponse>({ success: false, message: `提供商 id "${requestedId}" 已存在` }, 409)
   }
+  const id = requestedId || createProviderId(baseUrl, name, new Set(providers.map(p => p.id)))
 
   const now = new Date().toISOString()
   const provider: Provider = {
-    id: body.id,
-    name: body.name,
-    baseUrl: body.baseUrl.replace(/\/$/, ''),
+    id,
+    name,
+    baseUrl: baseUrl.replace(/\/$/, ''),
     apiType: body.apiType || 'openai',
 apiKeys: normalizeArray(body.apiKeys, (k) => ({ key: k, enabled: true })),
     models: body.models
@@ -361,26 +393,12 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
       continue
     }
 
-    // 3) 新提供商——从 baseUrl 主机名生成 ID
-    let id = baseUrl
-      .replace(/^https?:\/\//, '')
-      .replace(/\/.*$/, '')
-      .replace(/^www\./, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .substring(0, 48) || 'imported'
-
-    // 检查 ID 冲突（已有提供商 + 本次已创建的 batch 条目）
+    // 3) 新提供商——从 baseUrl 主机名生成唯一 ID
     const allCreatedIds = new Set(existing.map(p => p.id))
     for (const [, entry] of batchMerge) {
       allCreatedIds.add(entry.provider.id)
     }
-    if (allCreatedIds.has(id)) {
-      let suffix = 1
-      while (allCreatedIds.has(`${id}-${suffix}`)) suffix++
-      id = `${id}-${suffix}`
-    }
+    const id = createProviderId(baseUrl, name, allCreatedIds)
 
     const now = new Date().toISOString()
     const provider: Provider = {

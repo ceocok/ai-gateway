@@ -246,7 +246,6 @@ Session 过期返回 `401`：
 **请求体**:
 ```json
 {
-  "id": "my-provider",
   "name": "我的提供商",
   "baseUrl": "https://api.example.com",
   "apiType": "openai",
@@ -258,7 +257,7 @@ Session 过期返回 `401`：
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `id` | ✅ | 提供商唯一标识，需全局唯一 |
+| `id` | ❌ | 提供商唯一标识；默认根据 `baseUrl` 域名自动生成，冲突时自动追加数字后缀 |
 | `name` | ✅ | 显示名称 |
 | `baseUrl` | ✅ | 提供商 API 基础地址，尾部 `/` 会被自动去除 |
 | `apiType` | ❌ | `openai`（默认）或 `anthropic` |
@@ -268,13 +267,13 @@ Session 过期返回 `401`：
 
 **成功响应** (`201`): 返回新建的 Provider 对象。
 
-**冲突响应** (`409`): `提供商 id "my-provider" 已存在`。
+显式传入重复的 `id` 时返回冲突响应 (`409`)：`提供商 id "my-provider" 已存在`。
 
 ---
 
 #### PUT /admin/api/providers/:id
 
-更新提供商配置。`id`、`baseUrl`、`apiType` 等字段均可更新，`updatedAt` 自动刷新。
+更新提供商配置。`name`、`baseUrl`、`apiType` 等字段均可更新，内部 `id` 保持不变，`updatedAt` 自动刷新。
 
 **请求体**（所有字段可选）:
 ```json

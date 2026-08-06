@@ -45,7 +45,7 @@ export interface TestModelRequest {
 }
 
 export interface CreateProviderRequest {
-  id: string
+  id?: string
   name: string
   baseUrl: string
   apiType?: 'openai' | 'anthropic'

@@ -250,10 +250,7 @@ ${renderHeader(true, false)}
   <div class="add-form-wrap">
     <div id="af" class="hd add-form-panel">
       <h3 style="font-size:0.88rem;font-weight:700;color:var(--zinc-100);margin-bottom:12px;"><i class="fas fa-plus-circle c-p"></i> 添加新提供商</h3>
-      <div class="fr">
-        <div class="fg"><label>名称</label><input type="text" id="anm" placeholder="DeepSeek"></div>
-        <div class="fg"><label>ID</label><input type="text" id="aid" placeholder="deepseek"></div>
-      </div>
+      <div class="fg"><label>名称</label><input type="text" id="anm" placeholder="DeepSeek"></div>
       <div class="fg"><label>API 地址</label><input type="url" id="aurl" placeholder="https://api.deepseek.com"></div>
       <div class="fg">
         <label>API 格式</label>
@@ -274,7 +271,14 @@ ${renderHeader(true, false)}
         <button class="btn btn-gh btn-xs" onclick="addAKeyRow()"><i class="fas fa-plus"></i> 添加 Key</button>
       </div>
       <div class="fg">
-        <label>模型 ID <span style="font-weight:400;color:var(--text-muted);">（多个）</span></label>
+        <div class="model-field-head">
+          <label>模型</label>
+          <button class="btn btn-gh btn-xs" id="adiscover" onclick="discoverModels()">
+            <i class="fas fa-cloud-download-alt"></i> 获取模型
+          </button>
+        </div>
+        <div class="model-discovery-hint">填写 API 地址和 Key 后获取可用模型；不支持模型列表接口时可手动添加。</div>
+        <label class="manual-model-label">手动添加模型 ID</label>
         <div id="amodels">
           <div class="fc mb-4"><input type="text" placeholder="deepseek-chat" class="fx1 ami">
             <label class="tg"><input type="checkbox" checked class="ame"><span class="sl"></span></label>
@@ -282,7 +286,7 @@ ${renderHeader(true, false)}
             <button class="btn btn-gh btn-xs" onclick="this.parentElement.remove()"><i class="fas fa-times c-muted"></i></button>
           </div>
         </div>
-        <button class="btn btn-gh btn-xs" onclick="addMdlRow()"><i class="fas fa-plus"></i> 添加模型</button>
+        <button class="btn btn-gh btn-xs" onclick="addMdlRow()"><i class="fas fa-plus"></i> 添加一行</button>
       </div>
       <div class="fg"><label class="tg" style="display:inline-flex;align-items:center;gap:8px;width:auto;height:auto;"><input type="checkbox" checked id="aen"><span class="sl"></span><span style="font-size:0.78rem;color:var(--zinc-300);text-transform:none;letter-spacing:0;font-weight:500;margin-left:4px;">创建后启用</span></label></div>
       <div id="atestR"></div>
@@ -292,7 +296,7 @@ ${renderHeader(true, false)}
       </div>
     </div>
     <div id="amc" class="hd mdl-list-panel" style="align-self:start;">
-      <h3 style="font-size:0.82rem;font-weight:700;color:var(--zinc-300);margin-bottom:8px;"><i class="fas fa-list c-p"></i> 发现的模型</h3>
+      <h3 style="font-size:0.82rem;font-weight:700;color:var(--zinc-300);margin-bottom:8px;"><i class="fas fa-list-check c-p"></i> 选择可用模型</h3>
       <div id="amcl"></div>
     </div>
   </div>
@@ -513,43 +517,113 @@ function addAKeyRow() {
 function testNewAKey(btn) {
   const inp = btn.parentElement.querySelector('.aki'), k = inp.value.trim()
   if (!k) { toast('请输入 API Key', 'error'); return }
+  discoverModels(k, btn)
+}
+
+async function discoverModels(apiKey, triggerButton) {
   const url = document.getElementById('aurl').value.trim()
   if (!url) { toast('请先填写 API 地址', 'error'); return }
+  if (!apiKey) {
+    const akeys = document.querySelectorAll('#akeys .aki')
+    apiKey = Array.from(akeys).map(function(inp) { return inp.value.trim() }).filter(Boolean)[0]
+  }
+  if (!apiKey) { toast('请先填写 API Key', 'error'); return }
+
   const apiType = document.getElementById('afmt').value
   const tr = document.getElementById('atestR')
-  tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 测试中...</span>'
-  fetch('/admin/api/providers/probe', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ baseUrl: url, apiKey: k, apiType })
-  }).then(async function(r) {
+  const panel = document.getElementById('amc')
+  const list = document.getElementById('amcl')
+  const discoverButton = document.getElementById('adiscover')
+  const buttons = [triggerButton, discoverButton].filter(Boolean)
+  buttons.forEach(function(button) { button.disabled = true })
+  panel.classList.remove('hd')
+  list.innerHTML = '<div class="model-discovery-state"><i class="fas fa-circle-notch fa-spin"></i><span>正在读取提供商模型...</span></div>'
+  tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 正在连接...</span>'
+
+  try {
+    const r = await fetch('/admin/api/providers/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: url, apiKey: apiKey, apiType: apiType })
+    })
     const d = await r.json()
     const result = d.data || {}
     if (d.success && result.success) {
-      try {
-        const models = result.models || []
-        const h = models.map(function(m) {
-          return '<div class="mdl-item">' +
-            '<i class="fas fa-cube"></i>' +
-            '<span class="fx1 cp ov" onclick="copyText(\\'' + m + '\\',this)">' + m + '</span>' +
-            '<button class="btn btn-gh btn-xs mdl-add-btn" onclick="addMdlToForm(\\'' + m + '\\')" title="添加到表单">+</button></div>'
-        }).join('')
-        document.getElementById('amcl').innerHTML = h
-          ? '<div class="grid-2-gap6">' + h + '</div>'
-          : '<span style="color:var(--text-muted);font-size:0.78rem;">未返回模型列表</span>'
-        document.getElementById('amc').classList.remove('hd')
-      } catch (e) {}
+      renderDiscoveredModels(result.models || [])
       tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
     } else {
-      document.getElementById('amc').classList.add('hd')
+      list.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>未能读取模型列表，可继续手动填写。</span></div>'
       tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
     }
     setTimeout(function() { tr.innerHTML = '' }, 5000)
-  }).catch(function() {
-    document.getElementById('amc').classList.add('hd')
+  } catch (e) {
+    list.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>请求失败，可继续手动填写。</span></div>'
     tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
     setTimeout(function() { tr.innerHTML = '' }, 5000)
+  } finally {
+    buttons.forEach(function(button) { button.disabled = false })
+  }
+}
+
+function renderDiscoveredModels(models) {
+  const list = document.getElementById('amcl')
+  const uniqueModels = Array.from(new Set(models.filter(function(model) {
+    return typeof model === 'string' && model.trim()
+  }))).sort()
+
+  list.innerHTML = ''
+  if (uniqueModels.length === 0) {
+    list.innerHTML = '<div class="model-discovery-state"><i class="fas fa-info-circle"></i><span>提供商未返回模型列表，可继续手动填写。</span></div>'
+    return
+  }
+
+  const toolbar = document.createElement('div')
+  toolbar.className = 'model-picker-toolbar'
+  toolbar.innerHTML = '<span><strong id="amodelSelected">0</strong> / ' + uniqueModels.length + ' 已选择</span>' +
+    '<div class="model-picker-actions">' +
+    '<button class="btn btn-gh btn-xs" onclick="setDiscoveredSelection(true)">全选</button>' +
+    '<button class="btn btn-gh btn-xs" onclick="setDiscoveredSelection(false)">清空</button>' +
+    '</div>'
+  list.appendChild(toolbar)
+
+  const grid = document.createElement('div')
+  grid.className = 'model-picker-grid'
+  uniqueModels.forEach(function(model) {
+    const label = document.createElement('label')
+    label.className = 'model-choice'
+
+    const checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    checkbox.className = 'amd'
+    checkbox.value = model
+    checkbox.addEventListener('change', updateDiscoveredCount)
+
+    const icon = document.createElement('i')
+    icon.className = 'fas fa-cube'
+
+    const text = document.createElement('span')
+    text.textContent = model
+    text.title = model
+
+    label.appendChild(checkbox)
+    label.appendChild(icon)
+    label.appendChild(text)
+    grid.appendChild(label)
   })
+  list.appendChild(grid)
+}
+
+function updateDiscoveredCount() {
+  const count = document.querySelectorAll('#amcl .amd:checked').length
+  const counter = document.getElementById('amodelSelected')
+  if (counter) counter.textContent = String(count)
+}
+
+function setDiscoveredSelection(checked) {
+  document.querySelectorAll('#amcl .amd').forEach(function(input) {
+    input.checked = checked
+  })
+  updateDiscoveredCount()
 }
 
 // ── Add form: model rows ──
@@ -558,14 +632,6 @@ function addMdlRow() {
   const d = document.createElement('div')
   d.className = 'fc mb-4'
   d.innerHTML = '<input type="text" placeholder="deepseek-chat" class="fx1 ami"><label class="tg"><input type="checkbox" checked class="ame"><span class="sl"></span></label><button class="btn btn-gh btn-xs" onclick="testNewMdl(this)" title="测试"><i class="fas fa-plug"></i></button><button class="btn btn-gh btn-xs" onclick="this.parentElement.remove()"><i class="fas fa-times c-muted"></i></button>'
-  c.appendChild(d)
-}
-
-function addMdlToForm(mid) {
-  const c = document.getElementById('amodels')
-  const d = document.createElement('div')
-  d.className = 'fc mb-4'
-  d.innerHTML = '<input type="text" value="' + mid + '" class="fx1 ami"><label class="tg"><input type="checkbox" checked class="ame"><span class="sl"></span></label><button class="btn btn-gh btn-xs" onclick="testNewMdl(this)" title="测试"><i class="fas fa-plug"></i></button><button class="btn btn-gh btn-xs" onclick="this.parentElement.remove()"><i class="fas fa-times c-muted"></i></button>'
   c.appendChild(d)
 }
 
@@ -597,7 +663,7 @@ function testNewMdl(btn) {
 
 // ── Create provider ──
 async function createProv() {
-  const nm = document.getElementById('anm').value.trim(), id = document.getElementById('aid').value.trim()
+  const nm = document.getElementById('anm').value.trim()
   const url = document.getElementById('aurl').value.trim(), apiType = document.getElementById('afmt').value
   const aki = document.querySelectorAll('#akeys .aki')
   const keys = Array.from(aki).map(function(inp, i) {
@@ -606,17 +672,25 @@ async function createProv() {
     return k ? { key: k, enabled: en } : null
   }).filter(Boolean)
   const ami = document.querySelectorAll('#amodels .ami')
-  const models = Array.from(ami).map(function(inp) {
+  const manualModels = Array.from(ami).map(function(inp) {
     var mid = inp.value.trim()
     var en = inp.parentElement.querySelector('.ame')?.checked ?? true
     return mid ? { id: mid, enabled: en } : null
   }).filter(Boolean)
+  const discoveredModels = Array.from(document.querySelectorAll('#amcl .amd:checked')).map(function(inp) {
+    return { id: inp.value, enabled: true }
+  })
+  const modelMap = new Map()
+  discoveredModels.concat(manualModels).forEach(function(model) {
+    modelMap.set(model.id, model)
+  })
+  const models = Array.from(modelMap.values())
   const enabled = document.getElementById('aen').checked
-  if (!nm || !id || !url) { toast('请填写名称、ID 和 API 地址', 'error'); return }
+  if (!nm || !url) { toast('请填写名称和 API 地址', 'error'); return }
   const r = await fetch('/admin/api/providers', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: id, name: nm, baseUrl: url, apiType: apiType, apiKeys: keys, models: models, enabled: enabled })
+    body: JSON.stringify({ name: nm, baseUrl: url, apiType: apiType, apiKeys: keys, models: models, enabled: enabled })
   })
   const d = await r.json()
   if (d.success) { toast('已创建', 'success'); location.reload() }

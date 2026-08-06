@@ -1598,34 +1598,115 @@ footer a:hover {
 
 /* ── Model Discovery Panel ── */
 
-.mdl-item {
-  padding: 5px 8px;
-  border: 1px solid var(--zinc-700);
-  border-radius: 6px;
-  font-size: 0.8rem;
+.model-field-head,
+.model-picker-toolbar,
+.model-picker-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(9,9,11,0.3);
+  gap: 8px;
 }
 
-.mdl-item i:first-child {
+.model-field-head {
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.model-field-head label {
+  margin: 0;
+}
+
+.model-discovery-hint {
+  margin-bottom: 10px;
   color: var(--text-muted);
-  width: 14px;
-  flex-shrink: 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
 }
 
-.mdl-add-btn {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  font-size: 0.9rem;
-  line-height: 1;
+.manual-model-label {
+  margin-top: 10px;
 }
 
-.grid-2-gap6 {
+.model-picker-toolbar {
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(63,63,70,0.45);
+  color: var(--text-light);
+  font-size: 0.72rem;
+}
+
+.model-picker-toolbar strong {
+  color: var(--primary);
+}
+
+.model-picker-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+}
+
+.model-choice {
+  min-width: 0;
+  min-height: 34px;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--zinc-700);
+  border-radius: 6px;
+  background: rgba(9,9,11,0.3);
+  color: var(--zinc-300);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.model-choice:hover {
+  border-color: var(--primary-border);
+  background: var(--primary-bg);
+}
+
+.model-choice input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--primary);
+  flex-shrink: 0;
+}
+
+.model-choice i {
+  width: 13px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.model-choice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-discovery-state {
+  min-height: 110px;
+  padding: 18px;
+  border: 1px dashed var(--zinc-700);
+  border-radius: 7px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  font-size: 0.78rem;
+}
+
+.model-discovery-state.is-error {
+  color: var(--warning);
+  border-color: rgba(245,158,11,0.25);
 }
 
 /* ── Modal ── */
@@ -1809,6 +1890,9 @@ footer a:hover {
   .provider-workbench {
     padding: 12px;
     gap: 12px;
+  }
+  .model-picker-grid {
+    grid-template-columns: 1fr;
   }
   .detail-actions {
     position: static;

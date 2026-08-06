@@ -63,7 +63,7 @@ npm run dev
 
 - **API BASE URL**：`https://你的域名/v1/`
 - **API KEY**：在管理后台手动生成，格式为：`sk_cf_<KEY>`
-- **模型ID**：提供商ID/模型ID，提供商ID在设置中自定义，如：
+- **模型ID**：可直接使用模型 ID，也可通过 `提供商ID/模型ID` 精确指定提供商。提供商 ID 会根据 API 域名自动生成，如：
   - `deepseek/deepseek-v4/flash`
   - `openai/gpt-5.5`
   - `anthropic/claude-opus-4-8`
