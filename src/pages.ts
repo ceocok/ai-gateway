@@ -531,8 +531,13 @@ async function discoverModels(apiKey, triggerButton) {
   const url = document.getElementById('aurl').value.trim()
   if (!url) { toast('请先填写 API 地址', 'error'); return }
   if (!apiKey) {
-    const akeys = document.querySelectorAll('#akeys .aki')
-    apiKey = Array.from(akeys).map(function(inp) { return inp.value.trim() }).filter(Boolean)[0]
+    const rows = document.querySelectorAll('#akeys > .fc')
+    const values = Array.from(rows).map(function(row) {
+      const input = row.querySelector('.aki')
+      const enabled = row.querySelector('.ake')?.checked ?? true
+      return { value: input?.value.trim() || '', enabled: enabled }
+    }).filter(function(item) { return item.value })
+    apiKey = (values.find(function(item) { return item.enabled }) || values[0])?.value || ''
   }
   if (!apiKey) { toast('请先填写 API Key', 'error'); return }
 
@@ -717,8 +722,13 @@ function getKeys(id) {
 }
 
 function getProviderProbeKey(id) {
-  const keys = document.querySelectorAll('#keys-' + id + ' input[type="text"]')
-  return Array.from(keys).map(function(inp) { return inp.value.trim() }).filter(Boolean)[0] || ''
+  const rows = document.querySelectorAll('#keys-' + id + ' > [data-kidx]')
+  const values = Array.from(rows).map(function(row) {
+    const input = row.querySelector('input[type="text"]')
+    const enabled = row.querySelector('input[id^="ken-"]')?.checked ?? true
+    return { value: input?.value.trim() || '', enabled: enabled }
+  }).filter(function(item) { return item.value })
+  return (values.find(function(item) { return item.enabled }) || values[0])?.value || ''
 }
 
 function addKeyRow(id) {

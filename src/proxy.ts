@@ -112,6 +112,10 @@ function monitorResponseBody(
   })
 }
 
+export function normalizeProviderApiKey(apiKey: string): string {
+  return apiKey.trim().replace(/^Bearer\s+/i, '')
+}
+
 export function buildEndpointUrls(baseUrl: string, subPath: string, search = ''): string[] {
   const cleanBase = baseUrl.replace(/\/$/, '')
   const cleanSubPath = subPath.replace(/^\//, '')
@@ -131,6 +135,7 @@ export async function testModelConnection(
   modelId: string,
   apiType?: 'openai' | 'anthropic'
 ): Promise<{ success: boolean; message: string; statusCode?: number }> {
+  const normalizedApiKey = normalizeProviderApiKey(apiKey)
   try {
     const endpoint = apiType === 'anthropic' ? 'messages' : 'chat/completions'
     const urls = buildEndpointUrls(baseUrl, endpoint)
@@ -139,10 +144,10 @@ export async function testModelConnection(
       'Content-Type': 'application/json',
     }
     if (apiType === 'anthropic') {
-      headers['x-api-key'] = apiKey
+      headers['x-api-key'] = normalizedApiKey
       headers['anthropic-version'] = '2023-06-01'
     } else {
-      headers['Authorization'] = `Bearer ${apiKey}`
+      headers['Authorization'] = `Bearer ${normalizedApiKey}`
     }
 
     let lastResponse: Response | null = null
@@ -329,11 +334,12 @@ async function tryProvider(
       const forwardHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
       }
+      const normalizedApiKey = normalizeProviderApiKey(apiKey)
       if (provider.apiType === 'anthropic') {
-        forwardHeaders['x-api-key'] = apiKey
+        forwardHeaders['x-api-key'] = normalizedApiKey
         forwardHeaders['anthropic-version'] = '2023-06-01'
       } else {
-        forwardHeaders['Authorization'] = `Bearer ${apiKey}`
+        forwardHeaders['Authorization'] = `Bearer ${normalizedApiKey}`
       }
 
       let response: Response | null = null

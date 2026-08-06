@@ -14,7 +14,7 @@ import {
   updateProxyKey,
   deleteProxyKey,
 } from './storage'
-import { buildEndpointUrls, testModelConnection } from './proxy'
+import { buildEndpointUrls, normalizeProviderApiKey, testModelConnection } from './proxy'
 import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS } from './config'
 import type {
   Env,
@@ -92,12 +92,13 @@ async function fetchProviderModels(
   apiKey: string,
   apiType?: 'openai' | 'anthropic'
 ): Promise<{ success: boolean; message: string; statusCode?: number; models?: string[] }> {
+  const normalizedApiKey = normalizeProviderApiKey(apiKey)
   const headers: Record<string, string> = {}
   if (apiType === 'anthropic') {
-    headers['x-api-key'] = apiKey
+    headers['x-api-key'] = normalizedApiKey
     headers['anthropic-version'] = '2023-06-01'
   } else {
-    headers['Authorization'] = `Bearer ${apiKey}`
+    headers['Authorization'] = `Bearer ${normalizedApiKey}`
   }
 
   const urls = buildEndpointUrls(baseUrl, 'models')
