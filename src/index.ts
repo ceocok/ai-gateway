@@ -83,8 +83,13 @@ app.post('/admin/api/proxy-keys', handleCreateProxyKey)
 app.delete('/admin/api/proxy-keys/:id', handleDeleteProxyKey)
 app.patch('/admin/api/proxy-keys/:id', handleUpdateProxyKey)
 
-// ===== API 转发路由（需转发 Key 验证） =====
-app.use('/v1/*', proxyKeyAuthMiddleware)
+// ===== API 转发路由 =====
+// 模型目录允许公开读取，实际模型调用仍必须通过转发 Key 验证。
+app.use('/v1/*', async (c, next) => {
+  const url = new URL(c.req.url)
+  if (c.req.method === 'GET' && url.pathname === '/v1/models') return next()
+  return proxyKeyAuthMiddleware(c, next)
+})
 
 app.get('/v1/models', handleModels)
 app.all('/v1/*', handleProxy)
