@@ -183,6 +183,10 @@ async function l() {
 export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
   const providers = await getProviders(c.env)
   const proxyKeys = await getProxyKeys(c.env)
+  const requestedProviderId = c.req.query('provider')
+  const selectedProviderId = providers.some(p => p.id === requestedProviderId)
+    ? requestedProviderId
+    : providers[0]?.id
   const enabledProviders = providers.filter(p => p.enabled).length
   const totalModels = providers.reduce((sum, p) => sum + p.models.length, 0)
   const enabledModels = providers.reduce((sum, p) => sum + p.models.filter(m => m.enabled).length, 0)
@@ -305,7 +309,7 @@ ${renderHeader(true, false)}
   <div class="provider-workbench">
     <div class="provider-list" aria-label="提供商列表">
       ${providers.length ? providers.map((p, pi) => `
-      <div class="pi ${pi === 0 ? 'selected' : ''}" data-id="${p.id}">
+      <div class="pi ${p.id === selectedProviderId ? 'selected' : ''}" data-id="${p.id}">
         <div class="ps" onclick="selectProvider('${p.id}')">
           <div class="l">
             <i class="fas fa-fw fa-server"></i>
@@ -331,7 +335,7 @@ ${renderHeader(true, false)}
 
     <div class="provider-detail-pane">
       ${providers.length ? providers.map((p, pi) => `
-      <div class="pd ${pi === 0 ? 'open' : ''}" id="dt-${p.id}">
+      <div class="pd ${p.id === selectedProviderId ? 'open' : ''}" id="dt-${p.id}">
         <div class="detail-panel-head">
           <div>
             <p class="detail-eyebrow">Provider Details</p>
@@ -506,6 +510,15 @@ function selectProvider(id) {
   document.querySelectorAll('.provider-detail-pane .pd').forEach(function(panel) {
     panel.classList.toggle('open', panel.id === 'dt-' + id)
   })
+  const url = new URL(window.location.href)
+  url.searchParams.set('provider', id)
+  window.history.replaceState(null, '', url)
+}
+
+function providerPageUrl(id) {
+  const url = new URL(window.location.href)
+  url.searchParams.set('provider', id)
+  return url.toString()
 }
 
 // ── Add form show/hide ──
@@ -989,7 +1002,7 @@ async function save(id) {
     body: JSON.stringify({ name: nm, baseUrl: url, apiType: apiType, apiKeys: keys, models: models, enabled: enabled })
   })
   var d = await r.json()
-  if (d.success) { toast('已保存', 'success'); location.reload() }
+  if (d.success) { toast('已保存', 'success'); location.href = providerPageUrl(id) }
   else toast(d.message || '保存失败', 'error')
 }
 
