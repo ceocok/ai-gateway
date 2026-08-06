@@ -1,5 +1,5 @@
 import { Context } from 'hono'
-import { getProvider, getProviders, autoPauseProvider, recordCallEnd, recordCallStart } from './storage'
+import { getProvider, getProviders, autoPauseProvider, disableProviderKey, recordCallEnd, recordCallStart } from './storage'
 import { KV_KEYS, KEY_HEALTH_COOLDOWN_MS } from './config'
 import type { CallStatusRecord, Env, Provider, ProxyRequestBody } from './types'
 
@@ -40,6 +40,29 @@ function parseRetryAfterMs(response: Response): number | null {
   const seconds = parseInt(val, 10)
   if (!isNaN(seconds) && seconds > 0) return seconds * 1000
   return null
+}
+
+async function readUpstreamError(response: Response): Promise<string> {
+  try {
+    const body = await response.clone().text()
+    if (!body) return ''
+    try {
+      const data = JSON.parse(body) as { error?: { code?: string; message?: string }; message?: string }
+      const code = data.error?.code || ''
+      const message = data.error?.message || data.message || ''
+      return `${code} ${message} ${body}`.trim()
+    } catch {
+      return body
+    }
+  } catch {
+    return ''
+  }
+}
+
+function isUsageExhausted(status: number, errorBody: string): boolean {
+  if (status === 402) return true
+  if (status < 400) return false
+  return /insufficient[\s_-]*quota|quota[\s_-]*(?:exceeded|exhausted|depleted)|resource[\s_-]*exhausted|billing|credit[\s_-]*(?:exhausted|balance|limit)|balance[\s_-]*(?:insufficient|exhausted|low)|payment[\s_-]*required|配额|额度|用量|余额|欠费|充值|耗尽|超额/i.test(errorBody)
 }
 
 /** 解析模型 ID，如 "deepseek/deepseek-chat" → { providerId, modelId } */
@@ -394,19 +417,25 @@ async function tryProvider(
         })
       }
 
-      if (response.status === 401 || response.status === 403 || response.status === 429 || response.status >= 500) {
-        const h = healthData[apiKey] || { failures: 0, lastFailed: false }
-        h.failures++
-        h.lastFailed = true
-        if (h.failures >= 3) {
-          if (response.status === 429) {
-            const retryAfterMs = parseRetryAfterMs(response)
-            h.demotedAt = Date.now() - KEY_HEALTH_COOLDOWN_MS + (retryAfterMs ?? KEY_HEALTH_COOLDOWN_MS)
-          } else {
-            h.demotedAt = Date.now()
+      if (response.status === 401 || response.status === 402 || response.status === 403 || response.status === 429 || response.status >= 500) {
+        const errorBody = await readUpstreamError(response)
+        if (isUsageExhausted(response.status, errorBody)) {
+          await disableProviderKey(c.env, provider.id, apiKey).catch(() => {})
+          delete healthData[apiKey]
+        } else {
+          const h = healthData[apiKey] || { failures: 0, lastFailed: false }
+          h.failures++
+          h.lastFailed = true
+          if (h.failures >= 3) {
+            if (response.status === 429) {
+              const retryAfterMs = parseRetryAfterMs(response)
+              h.demotedAt = Date.now() - KEY_HEALTH_COOLDOWN_MS + (retryAfterMs ?? KEY_HEALTH_COOLDOWN_MS)
+            } else {
+              h.demotedAt = Date.now()
+            }
           }
+          healthData[apiKey] = h
         }
-        healthData[apiKey] = h
         healthUpdated = true
         lastError = response
         await finishCall('error', response.status, `HTTP ${response.status}`)

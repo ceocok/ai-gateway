@@ -35,6 +35,22 @@ export async function updateProvider(env: Env, id: string, updates: Partial<Prov
   return providers[index]
 }
 
+export async function disableProviderKey(env: Env, providerId: string, apiKey: string): Promise<boolean> {
+  const provider = await getProvider(env, providerId)
+  if (!provider) return false
+
+  let changed = false
+  const apiKeys = provider.apiKeys.map((entry) => {
+    if (entry.key !== apiKey || !entry.enabled) return entry
+    changed = true
+    return { ...entry, enabled: false }
+  })
+
+  if (!changed) return false
+  await updateProvider(env, providerId, { apiKeys })
+  return true
+}
+
 export async function deleteProvider(env: Env, id: string): Promise<boolean> {
   const providers = await getProviders(env)
   const filtered = providers.filter((p) => p.id !== id)
