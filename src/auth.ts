@@ -19,7 +19,7 @@ export async function adminAuthMiddleware(c: Context<{ Bindings: Env }>, next: N
 
   if (!sessionId) {
     const url = new URL(c.req.url)
-    if (url.pathname === '/admin/login') return next()
+    if (url.pathname === '/admin/login' || url.pathname === '/admin/oauth/openai/callback') return next()
     if (url.pathname.startsWith('/admin/api/')) {
       return c.json({ success: false, message: '未登录' }, 401)
     }
@@ -30,6 +30,7 @@ export async function adminAuthMiddleware(c: Context<{ Bindings: Env }>, next: N
   if (!session) {
     deleteCookie(c, 'session_id')
     const url = new URL(c.req.url)
+    if (url.pathname === '/admin/oauth/openai/callback') return next()
     if (url.pathname.startsWith('/admin/api/')) {
       return c.json({ success: false, message: 'Session 已过期' }, 401)
     }

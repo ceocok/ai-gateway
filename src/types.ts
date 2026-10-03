@@ -6,13 +6,24 @@ export interface Model {
 export interface ApiKeyEntry {
   key: string
   enabled: boolean
+  /** 默认是 apikey；OAuth 凭据的 key 是不包含令牌内容的稳定 ID。 */
+  type?: 'apikey' | 'openai-oauth'
+  /** 以下字段仅用于 openai-oauth，值均为加密后的密文。 */
+  accessToken?: string
+  refreshToken?: string
+  expiresAt?: string
+  clientId?: string
+  chatgptAccountId?: string
+  email?: string
 }
+
+export type ProviderApiType = 'openai' | 'anthropic' | 'openai-oauth'
 
 export interface Provider {
   id: string
   name: string
   baseUrl: string
-  apiType?: 'openai' | 'anthropic'
+  apiType?: ProviderApiType
   apiKeys: ApiKeyEntry[]
   models: Model[]
   enabled: boolean
@@ -48,8 +59,8 @@ export interface CreateProviderRequest {
   id?: string
   name: string
   baseUrl: string
-  apiType?: 'openai' | 'anthropic'
-  apiKeys?: Array<{ key: string; enabled: boolean }>
+  apiType?: ProviderApiType
+  apiKeys?: Array<ApiKeyEntry | { key: string; enabled: boolean }>
   models?: Array<{ id: string; enabled: boolean }> | string[]
   enabled?: boolean
 }
@@ -57,10 +68,22 @@ export interface CreateProviderRequest {
 export interface UpdateProviderRequest {
   name?: string
   baseUrl?: string
-  apiType?: 'openai' | 'anthropic'
-  apiKeys?: Array<{ key: string; enabled: boolean }>
+  apiType?: ProviderApiType
+  apiKeys?: Array<ApiKeyEntry | { key: string; enabled: boolean }>
+  /** 管理后台编辑时保留服务端已有的 OAuth 凭据，避免令牌回显到浏览器。 */
+  preserveOAuthCredentials?: boolean
   models?: Array<{ id: string; enabled: boolean }> | string[]
   enabled?: boolean
+}
+
+export interface OpenAIOAuthSession {
+  state: string
+  /** 使用 OAUTH_ENCRYPTION_KEY 加密后的 PKCE verifier。 */
+  encryptedCodeVerifier: string
+  createdAt: string
+  providerId?: string
+  redirectUri?: string
+  clientId?: string
 }
 
 export interface CreateProxyKeyRequest {
@@ -96,7 +119,7 @@ export interface CallStatusRecord {
   providerName: string
   modelId: string
   requestedModel: string
-  apiType: 'openai' | 'anthropic'
+  apiType: ProviderApiType
   path: string
   method: string
   stream: boolean
@@ -113,4 +136,7 @@ export interface Env {
   KV: KVNamespace
   ADMIN_USERNAME?: string
   ADMIN_PASSWORD?: string
+  OAUTH_ENCRYPTION_KEY?: string
+  OPENAI_OAUTH_CLIENT_ID?: string
+  OPENAI_OAUTH_CLIENT_SECRET?: string
 }

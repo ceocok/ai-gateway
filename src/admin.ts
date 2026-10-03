@@ -15,18 +15,36 @@ import {
   addProxyKey,
   updateProxyKey,
   deleteProxyKey,
+  createOpenAIOAuthSession,
+  getOpenAIOAuthSession,
+  deleteOpenAIOAuthSession,
 } from './storage'
 import { buildEndpointUrls, normalizeProviderApiKey, testModelConnection } from './proxy'
-import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS } from './config'
+import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS, OPENAI_OAUTH_CONFIG } from './config'
 import type {
   Env,
   ApiResponse,
   Provider,
+  ProviderApiType,
+  ApiKeyEntry,
+  OpenAIOAuthSession,
   CreateProviderRequest,
   UpdateProviderRequest,
   CreateProxyKeyRequest,
   TestModelRequest,
 } from './types'
+import {
+  buildOpenAIAuthorizeUrl,
+  exchangeOpenAICode,
+  generateCodeChallenge,
+  generateCodeVerifier,
+  generateState,
+  getEncryptionSecret,
+  encryptSecret,
+  decryptSecret,
+  parseJwtPayload,
+  resolveProviderKeyToken,
+} from './oauth'
 
 // ===== 系统状态 =====
 
@@ -76,7 +94,7 @@ function createProviderId(baseUrl: string, name: string, usedIds: Set<string>): 
 type ProviderProbeRequest = {
   baseUrl?: string
   apiKey?: string
-  apiType?: 'openai' | 'anthropic'
+  apiType?: ProviderApiType
   modelId?: string
 }
 
@@ -92,10 +110,13 @@ async function readProviderError(response: Response): Promise<string> {
 async function fetchProviderModels(
   baseUrl: string,
   apiKey: string,
-  apiType?: 'openai' | 'anthropic'
+  apiType?: ProviderApiType,
+  extraHeaders?: Record<string, string>
 ): Promise<{ success: boolean; message: string; statusCode?: number; models?: string[] }> {
   const normalizedApiKey = normalizeProviderApiKey(apiKey)
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = {
+    ...extraHeaders,
+  }
   if (apiType === 'anthropic') {
     headers['x-api-key'] = normalizedApiKey
     headers['anthropic-version'] = '2023-06-01'
@@ -231,7 +252,23 @@ export async function handleUpdateProvider(c: Context<{ Bindings: Env }>) {
   if (body.baseUrl !== undefined) updates.baseUrl = body.baseUrl.replace(/\/$/, '')
   if (body.apiType !== undefined) updates.apiType = body.apiType
   if (body.apiKeys !== undefined) {
-    updates.apiKeys = normalizeArray(body.apiKeys, (k) => ({ key: k, enabled: true }))
+    const rawKeys = normalizeArray(body.apiKeys, (k) => ({ key: k, enabled: true }))
+    const existing = await getProvider(c.env, id)
+    if (existing && existing.apiKeys.length > 0) {
+      const existingKeyMap = new Map(existing.apiKeys.map(k => [k.key, k]))
+      updates.apiKeys = rawKeys.map(k => {
+        const prev = existingKeyMap.get(k.key)
+        if (prev && prev.type === 'openai-oauth') {
+          return {
+            ...prev,
+            enabled: k.enabled !== undefined ? k.enabled : prev.enabled,
+          }
+        }
+        return k
+      })
+    } else {
+      updates.apiKeys = rawKeys
+    }
   }
   if (body.enabled !== undefined) updates.enabled = body.enabled
   if (body.models !== undefined) {
@@ -304,8 +341,20 @@ export async function handleTestModel(c: Context<{ Bindings: Env }>) {
     return c.json<ApiResponse>({ success: false, message: '该提供商未配置可用的 API Key' }, 400)
   }
 
-  const apiKey = enabledKeys[0].key
-  const result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType)
+  const apiKeyEntry = enabledKeys[0]
+  let apiKey = apiKeyEntry.key
+  let extraHeaders: Record<string, string> | undefined
+  if (apiKeyEntry.type === 'openai-oauth' || provider.apiType === 'openai-oauth') {
+    const resolved = await resolveProviderKeyToken(c.env, provider.id, apiKeyEntry)
+    if (resolved) {
+      apiKey = resolved.token
+      if (resolved.chatgptAccountId) {
+        extraHeaders = { 'ChatGPT-Account-Id': resolved.chatgptAccountId }
+      }
+    }
+  }
+
+  const result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType, extraHeaders)
 
   return c.json<ApiResponse>({
     success: true,
@@ -347,23 +396,48 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
   const imported: Array<{ id: string; name: string; models: number; merged: boolean }> = []
   const skipped: Array<{ name: string; reason: string }> = []
   // 本次导入中按 baseUrl 暂存待合并的 key/models
-  const batchMerge = new Map<string, { provider: Provider; apiKeys: string[]; modelIds: Set<string> }>()
+  const batchMerge = new Map<string, { provider: Provider; apiKeys: ApiKeyEntry[]; modelIds: Set<string> }>()
 
   for (const acct of rawAccounts) {
-    // 只导入 apikey 类型
-    if (acct.type !== 'apikey') {
-      skipped.push({ name: acct.name || '(unnamed)', reason: '非 apikey 类型（oauth），跳过' })
+    const isOAuth = acct.type === 'oauth'
+    if (acct.type !== 'apikey' && !isOAuth) {
+      skipped.push({ name: acct.name || '(unnamed)', reason: `不支持的账号类型 (${acct.type})，跳过` })
       continue
     }
 
     const name = acct.name?.trim() || 'imported'
-    const baseUrl = (acct.credentials?.base_url || '').replace(/\/$/, '')
-    const apiKey = acct.credentials?.api_key || ''
+    const baseUrl = (acct.credentials?.base_url || (isOAuth ? 'https://api.openai.com/v1' : '')).replace(/\/$/, '')
+    const apiKey = acct.credentials?.api_key || acct.credentials?.access_token || ''
     const modelMapping = acct.credentials?.model_mapping || {}
 
     if (!baseUrl || !apiKey) {
-      skipped.push({ name, reason: '缺少 base_url 或 api_key' })
+      skipped.push({ name, reason: '缺少 base_url 或凭据 (api_key / access_token)' })
       continue
+    }
+
+    let keyEntry: ApiKeyEntry = { key: apiKey, enabled: true }
+    if (isOAuth) {
+      const secret = getEncryptionSecret(c.env)
+      const encAccess = await encryptSecret(acct.credentials.access_token, secret)
+      const encRefresh = acct.credentials.refresh_token
+        ? await encryptSecret(acct.credentials.refresh_token, secret)
+        : undefined
+      const payload = parseJwtPayload(acct.credentials.access_token)
+      const email = acct.credentials.email || (payload.email as string) || ''
+      const chatgptAccountId = acct.credentials.chatgpt_account_id || acct.credentials.account_id || (payload.account_id as string) || ''
+      const keyId = `oauth_${(email || chatgptAccountId || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 32)}`
+
+      keyEntry = {
+        key: keyId,
+        enabled: true,
+        type: 'openai-oauth',
+        accessToken: encAccess,
+        refreshToken: encRefresh,
+        expiresAt: acct.credentials.expires_at || undefined,
+        clientId: acct.credentials.client_id || undefined,
+        chatgptAccountId: chatgptAccountId || undefined,
+        email: email || undefined,
+      }
     }
 
     const urlKey = baseUrl.toLowerCase()
@@ -373,9 +447,9 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
     const existingProvider = existingByUrl.get(urlKey)
     if (existingProvider) {
       // 追加 API Key（去重）
-      const keyExists = existingProvider.apiKeys.some(k => k.key === apiKey)
+      const keyExists = existingProvider.apiKeys.some(k => k.key === keyEntry.key)
       if (!keyExists) {
-        existingProvider.apiKeys.push({ key: apiKey, enabled: true })
+        existingProvider.apiKeys.push(keyEntry)
       }
       // 追加模型（去重）
       for (const mid of models) {
@@ -394,8 +468,8 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
     // 2) 检查本次导入中是否已有相同 baseUrl → 暂存合并
     const batchEntry = batchMerge.get(urlKey)
     if (batchEntry) {
-      if (!batchEntry.apiKeys.includes(apiKey)) {
-        batchEntry.apiKeys.push(apiKey)
+      if (!batchEntry.apiKeys.some(k => k.key === keyEntry.key)) {
+        batchEntry.apiKeys.push(keyEntry)
       }
       for (const mid of models) {
         batchEntry.modelIds.add(mid)
@@ -416,20 +490,21 @@ export async function handleImportSub2Api(c: Context<{ Bindings: Env }>) {
       id,
       name,
       baseUrl,
-      apiType: acct.platform === 'anthropic' ? 'anthropic' : 'openai',
-      apiKeys: [{ key: apiKey, enabled: true }],
+      apiType: isOAuth ? 'openai-oauth' : (acct.platform === 'anthropic' ? 'anthropic' : 'openai'),
+      apiKeys: [keyEntry],
       models: models.map(mid => ({ id: mid, enabled: true })),
       enabled: true,
       createdAt: now,
       updatedAt: now,
     }
 
-    batchMerge.set(urlKey, { provider, apiKeys: [apiKey], modelIds: new Set(models) })
+    batchMerge.set(urlKey, { provider, apiKeys: [keyEntry], modelIds: new Set(models) })
     imported.push({ id: provider.id, name: provider.name, models: models.length, merged: false })
   }
 
   // 批量写入暂存的合并条目
   for (const [, entry] of batchMerge) {
+    entry.provider.apiKeys = entry.apiKeys
     // 合并 batch 内的重复模型
     entry.provider.models = Array.from(entry.modelIds).map(mid => ({ id: mid, enabled: true }))
     await addProvider(c.env, entry.provider)
@@ -511,15 +586,26 @@ export async function handleRecoverProvider(c: Context<{ Bindings: Env }>) {
     }
   }
   for (const key of enabledKeys) {
+    let testKey = key.key
+    let extraHeaders: Record<string, string> | undefined
+    if (key.type === 'openai-oauth' || provider.apiType === 'openai-oauth') {
+      const resolved = await resolveProviderKeyToken(c.env, provider.id, key)
+      if (resolved) {
+        testKey = resolved.token
+        if (resolved.chatgptAccountId) {
+          extraHeaders = { 'ChatGPT-Account-Id': resolved.chatgptAccountId }
+        }
+      }
+    }
     // 优先使用 /models 验证 Key，避免某个模型暂时不可用导致恢复失败。
-    const modelsResult = await fetchProviderModels(provider.baseUrl, key.key, provider.apiType)
+    const modelsResult = await fetchProviderModels(provider.baseUrl, testKey, provider.apiType, extraHeaders)
     markAttempt(modelsResult)
     if (modelsResult.success) {
       await recoverProvider(c.env, id)
       return c.json<ApiResponse>({ success: true, data: modelsResult, message: `恢复成功，提供商 "${provider.name}" 已重新启用` })
     }
     for (const model of enabledModels) {
-      const modelResult = await testModelConnection(provider.baseUrl, key.key, model.id, provider.apiType)
+      const modelResult = await testModelConnection(provider.baseUrl, testKey, model.id, provider.apiType, extraHeaders)
       markAttempt(modelResult)
       if (modelResult.success) {
         await recoverProvider(c.env, id)
@@ -637,4 +723,223 @@ export async function handleUpdateProxyKey(c: Context<{ Bindings: Env }>) {
     return c.json<ApiResponse>({ success: false, message: '转发 Key 不存在' }, 404)
   }
   return c.json<ApiResponse>({ success: true, data: updated })
+}
+
+// ===== OpenAI OAuth 授权流程 =====
+
+/** 发起 OpenAI OAuth PKCE 授权 */
+export async function handleOpenAIOAuthStart(c: Context<{ Bindings: Env }>) {
+  const url = new URL(c.req.url)
+  const providerId = url.searchParams.get('providerId') || 'openai'
+  const customClientId = url.searchParams.get('clientId') || c.env.OPENAI_OAUTH_CLIENT_ID || OPENAI_OAUTH_CONFIG.DEFAULT_CLIENT_ID
+  const redirectUri = url.searchParams.get('redirectUri') || `${url.origin}/admin/oauth/openai/callback`
+
+  const codeVerifier = generateCodeVerifier()
+  const codeChallenge = await generateCodeChallenge(codeVerifier)
+  const state = generateState()
+
+  const secret = getEncryptionSecret(c.env)
+  const encryptedCodeVerifier = await encryptSecret(codeVerifier, secret)
+
+  const session: OpenAIOAuthSession = {
+    state,
+    encryptedCodeVerifier,
+    createdAt: new Date().toISOString(),
+    providerId,
+    redirectUri,
+    clientId: customClientId,
+  }
+
+  // 存入 KV 临时会话
+  await createOpenAIOAuthSession(c.env, state, session, OPENAI_OAUTH_CONFIG.SESSION_TTL)
+
+  const authUrl = buildOpenAIAuthorizeUrl({
+    clientId: customClientId,
+    redirectUri,
+    state,
+    codeChallenge,
+  })
+
+  if (url.searchParams.get('direct') === '1') {
+    return c.redirect(authUrl)
+  }
+
+  return c.json<ApiResponse<{ authUrl: string; state: string }>>({
+    success: true,
+    data: { authUrl, state },
+  })
+}
+
+/** OpenAI OAuth 回调处理 */
+export async function handleOpenAIOAuthCallback(c: Context<{ Bindings: Env }>) {
+  const url = new URL(c.req.url)
+  const code = url.searchParams.get('code')
+  const state = url.searchParams.get('state')
+  const oauthError = url.searchParams.get('error')
+  const errorDescription = url.searchParams.get('error_description')
+
+  const renderCallbackResult = (success: boolean, message: string, email?: string, providerId?: string) => {
+    return c.html(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${success ? '授权成功' : '授权失败'} — AI Gateway</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+  <style>
+    body {
+      margin: 0; padding: 0;
+      background: #09090b; color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex; align-items: center; justify-content: center; min-height: 100vh;
+    }
+    .card {
+      background: rgba(24, 24, 27, 0.9);
+      border: 1px solid ${success ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)'};
+      border-radius: 14px; padding: 32px; max-width: 420px; width: 90%;
+      text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    }
+    .icon {
+      font-size: 2.8rem; margin-bottom: 16px;
+      color: ${success ? '#10b981' : '#ef4444'};
+    }
+    h2 { margin: 0 0 10px; font-size: 1.25rem; font-weight: 700; }
+    p { margin: 0 0 16px; font-size: 0.9rem; color: #a1a1aa; line-height: 1.5; }
+    .email { color: #f4f4f5; font-weight: 600; word-break: break-all; }
+    .hint { font-size: 0.78rem; color: #71717a; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon"><i class="fas ${success ? 'fa-check-circle' : 'fa-times-circle'}"></i></div>
+    <h2>${success ? 'OpenAI 授权绑定成功' : 'OpenAI 授权失败'}</h2>
+    <p>${message}${email ? `<br><span class="email">${email}</span>` : ''}</p>
+    <div class="hint">${success ? '窗口将在 2 秒后自动关闭并同步...' : '请关闭此窗口并重试。'}</div>
+  </div>
+  <script>
+    if (window.opener) {
+      window.opener.postMessage({
+        type: '${success ? 'openai_oauth_success' : 'openai_oauth_error'}',
+        providerId: '${providerId || ''}',
+        message: '${message.replace(/'/g, "\\'")}'
+      }, '*');
+      ${success ? 'setTimeout(function() { window.close() }, 2000);' : ''}
+    } else {
+      ${success ? 'setTimeout(function() { window.location.href = "/admin" }, 2000);' : ''}
+    }
+  </script>
+</body>
+</html>`)
+  }
+
+  if (oauthError) {
+    return renderCallbackResult(false, errorDescription || oauthError || 'OpenAI 授权被取消或失败')
+  }
+
+  if (!code || !state) {
+    return renderCallbackResult(false, '缺少 code 或 state 参数')
+  }
+
+  const session = await getOpenAIOAuthSession(c.env, state)
+  if (!session) {
+    return renderCallbackResult(false, '授权会话已过期或无效，请重新发起授权')
+  }
+
+  const secret = getEncryptionSecret(c.env)
+  let codeVerifier = ''
+  try {
+    codeVerifier = await decryptSecret(session.encryptedCodeVerifier, secret)
+  } catch {
+    return renderCallbackResult(false, '解密授权验证码失败，请检查加密密钥配置')
+  }
+
+  const clientId = session.clientId || c.env.OPENAI_OAUTH_CLIENT_ID || OPENAI_OAUTH_CONFIG.DEFAULT_CLIENT_ID
+  const redirectUri = session.redirectUri || `${url.origin}/admin/oauth/openai/callback`
+
+  let tokenData: import('./oauth').OpenAITokenResponse
+  try {
+    tokenData = await exchangeOpenAICode({
+      clientId,
+      code,
+      redirectUri,
+      codeVerifier,
+    })
+  } catch (err: any) {
+    return renderCallbackResult(false, `令牌交换失败: ${err.message || '未知错误'}`)
+  }
+
+  // 从 token 中解析账号与信息
+  const payload = parseJwtPayload(tokenData.id_token || tokenData.access_token)
+  const email = (payload.email as string) || (payload.sub as string) || ''
+  const chatgptAccountId =
+    tokenData.chatgpt_account_id ||
+    (payload['https://api.openai.com/auth']?.chatgpt_account_id as string) ||
+    (payload['https://api.openai.com/profile']?.account_id as string) ||
+    (payload.account_id as string) ||
+    (payload.org_id as string) ||
+    ''
+
+  const expiresIn = tokenData.expires_in || 3600
+  const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
+  const encryptedAccessToken = await encryptSecret(tokenData.access_token, secret)
+  const encryptedRefreshToken = tokenData.refresh_token ? await encryptSecret(tokenData.refresh_token, secret) : undefined
+
+  // 目标提供商
+  const providerId = session.providerId || 'openai'
+  const provider = await getProvider(c.env, providerId)
+
+  const keyId = `oauth_${(email || chatgptAccountId || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 32)}`
+  const newApiKeyEntry: ApiKeyEntry = {
+    key: keyId,
+    enabled: true,
+    type: 'openai-oauth',
+    accessToken: encryptedAccessToken,
+    refreshToken: encryptedRefreshToken,
+    expiresAt,
+    clientId,
+    chatgptAccountId: chatgptAccountId || undefined,
+    email: email || undefined,
+  }
+
+  if (provider) {
+    // 存在提供商，更新或追加 OAuth Key
+    const existingIndex = provider.apiKeys.findIndex(k => k.key === keyId || k.type === 'openai-oauth')
+    let nextKeys: ApiKeyEntry[] = []
+    if (existingIndex >= 0) {
+      nextKeys = [...provider.apiKeys]
+      nextKeys[existingIndex] = newApiKeyEntry
+    } else {
+      nextKeys = [...provider.apiKeys, newApiKeyEntry]
+    }
+    await updateProvider(c.env, provider.id, {
+      apiKeys: nextKeys,
+      apiType: provider.apiType || 'openai-oauth',
+      enabled: true,
+    })
+  } else {
+    // 不存在提供商，自动创建
+    const now = new Date().toISOString()
+    const newProvider: Provider = {
+      id: providerId,
+      name: 'OpenAI (OAuth)',
+      baseUrl: 'https://api.openai.com/v1',
+      apiType: 'openai-oauth',
+      apiKeys: [newApiKeyEntry],
+      models: [
+        { id: 'gpt-4o', enabled: true },
+        { id: 'gpt-4o-mini', enabled: true },
+        { id: 'gpt-5.5', enabled: true },
+        { id: 'gpt-5', enabled: true },
+      ],
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    }
+    await addProvider(c.env, newProvider)
+  }
+
+  // 清除临时会话
+  await deleteOpenAIOAuthSession(c.env, state)
+
+  return renderCallbackResult(true, '已成功连接 OpenAI OAuth 账号！', email, providerId)
 }

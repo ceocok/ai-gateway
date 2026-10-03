@@ -641,6 +641,226 @@ select option {
   gap: 12px;
 }
 
+/* ── Home Provider Collapsible Accordion ── */
+
+.home-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.home-search-box {
+  position: relative;
+  flex: 1;
+  min-width: 240px;
+  max-width: 480px;
+}
+
+.home-search-box i {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.home-search-input {
+  width: 100%;
+  padding: 7px 12px 7px 34px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  color: var(--page-text);
+  font-size: 0.82rem;
+  transition: all 0.15s ease;
+}
+
+.home-search-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-bg);
+}
+
+.home-search-input::placeholder {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.home-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.home-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.home-provider-card {
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  background: var(--card-bg);
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.home-provider-card:hover {
+  border-color: var(--card-border-hover);
+}
+
+.home-provider-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  cursor: pointer;
+  user-select: none;
+  gap: 12px;
+  transition: background 0.15s ease;
+}
+
+.home-provider-hd:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.home-provider-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.home-provider-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--primary-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.home-provider-icon i {
+  color: var(--primary);
+  font-size: 0.8rem;
+}
+
+.home-provider-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.home-provider-name {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--zinc-100);
+}
+
+.home-provider-id-badge {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: rgba(39, 39, 42, 0.4);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(63, 63, 70, 0.4);
+}
+
+.home-provider-type {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--zinc-700);
+  letter-spacing: 0.02em;
+}
+
+.home-provider-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.home-model-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(39, 39, 42, 0.7);
+  color: var(--zinc-300);
+  border: 1px solid var(--zinc-700);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.home-provider-chevron {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  transition: transform 0.2s ease;
+  width: 14px;
+  text-align: center;
+}
+
+.home-provider-card.expanded .home-provider-chevron {
+  transform: rotate(180deg);
+}
+
+.home-provider-body {
+  display: none;
+  padding: 12px 18px 16px 18px;
+  border-top: 1px solid rgba(63, 63, 70, 0.3);
+  background: rgba(9, 9, 11, 0.25);
+}
+
+.home-provider-card.expanded .home-provider-body {
+  display: block;
+}
+
+.home-provider-tip {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .home-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .home-search-box {
+    max-width: 100%;
+  }
+  .home-toolbar-actions {
+    justify-content: flex-end;
+  }
+  .home-provider-hd {
+    padding: 10px 14px;
+  }
+  .home-provider-left {
+    gap: 8px;
+  }
+  .home-provider-body {
+    padding: 10px 14px 14px 14px;
+  }
+}
+
 .sg {
   display: flex;
   gap: 12px;

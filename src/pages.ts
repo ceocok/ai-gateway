@@ -84,46 +84,129 @@ ${renderHeader(isLoggedIn, true)}
     </div>
   </div>
 
-  <!-- Provider Grid -->
-  <div class="g2">
-    ${providers.filter(p=>p.enabled).map(p => `
-      <div class="card p-14" style="padding:16px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <div style="width:30px;height:30px;border-radius:6px;background:var(--primary-bg);display:flex;align-items:center;justify-content:center;">
-              <i class="fas fa-server" style="color:var(--primary);font-size:0.7rem;"></i>
+  <!-- Toolbar: Search & Expand/Collapse -->
+  <div class="home-toolbar">
+    <div class="home-search-box">
+      <i class="fas fa-search"></i>
+      <input type="text" id="modelSearch" class="home-search-input" placeholder="搜索模型或提供商 (如 qwen, claude, deepseek)..." oninput="filterProviders(this.value)">
+    </div>
+    <div class="home-toolbar-actions">
+      <button class="btn btn-gh btn-xs" onclick="expandAllProviders()"><i class="fas fa-chevron-down"></i> 全部展开</button>
+      <button class="btn btn-gh btn-xs" onclick="collapseAllProviders()"><i class="fas fa-chevron-up"></i> 全部收起</button>
+    </div>
+  </div>
+
+  <!-- Empty Search State -->
+  <div id="homeEmptySearch" style="display:none;text-align:center;padding:40px 20px;color:var(--text-muted);">
+    <i class="fas fa-search" style="font-size:1.8rem;margin-bottom:10px;opacity:0.35;"></i>
+    <p style="font-size:0.88rem;">没有找到匹配的模型或提供商</p>
+  </div>
+
+  <!-- Provider List (Collapsible) -->
+  <div class="home-provider-list" id="homeProviderList">
+    ${providers.filter(p=>p.enabled).map(p => {
+      const activeModels = p.models.filter(m=>m.enabled)
+      return `
+      <div class="home-provider-card" data-id="${escHtml(p.id)}" data-name="${escHtml(p.name)}">
+        <div class="home-provider-hd" onclick="toggleProvider(this)">
+          <div class="home-provider-left">
+            <div class="home-provider-icon">
+              <i class="fas fa-server"></i>
             </div>
-            <div>
-              <h3 style="font-size:0.88rem;font-weight:700;color:var(--zinc-100);">${p.name}</h3>
-              <span style="font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;padding:1px 6px;border-radius:3px;border:1px solid var(--zinc-700);letter-spacing:0.02em;">${(p.apiType||'openai')==='anthropic'?'Anthropic':'OpenAI'}</span>
+            <div class="home-provider-info">
+              <span class="home-provider-name">${escHtml(p.name)}</span>
+              <span class="home-provider-id-badge">${escHtml(p.id)}</span>
+              <span class="home-provider-type">${(p.apiType||'openai')==='anthropic'?'Anthropic':'OpenAI'}</span>
             </div>
           </div>
-          <span class="bd-on"><i class="fas fa-check-circle"></i> 在线</span>
+          <div class="home-provider-right">
+            <span class="home-model-badge"><i class="fas fa-cubes" style="font-size:0.65rem;margin-right:3px;"></i>${activeModels.length} 个模型</span>
+            <span class="bd-on"><i class="fas fa-check-circle"></i> 在线</span>
+            <i class="fas fa-chevron-down home-provider-chevron"></i>
+          </div>
         </div>
-        ${p.models.filter(m=>m.enabled).length
-          ? `<div class="mw">${p.models.filter(m=>m.enabled).map(m=>`<span class="tag" onclick='copyText("${p.id}/${m.id}",this)'><i class="fas fa-cube"></i>${p.id}/${m.id}</span>`).join('')}</div>`
-          : `<p style="font-size:0.78rem;color:var(--text-muted);font-style:italic;">暂无启用的模型</p>`
-        }
+        <div class="home-provider-body">
+          <div class="home-provider-tip">
+            <i class="fas fa-info-circle"></i>
+            <span>点击模型标签即可复制完整请求路径：</span>
+            <code class="cd" style="font-size:0.7rem;">${escHtml(p.id)}/&lt;model_id&gt;</code>
+          </div>
+          ${activeModels.length
+            ? `<div class="mw">${activeModels.map(m=>`<span class="tag" data-model="${escHtml(p.id)}/${escHtml(m.id)}" onclick='copyText("${escHtml(p.id)}/${escHtml(m.id)}",this)'><i class="fas fa-cube"></i>${escHtml(p.id)}/${escHtml(m.id)}</span>`).join('')}</div>`
+            : `<p style="font-size:0.78rem;color:var(--text-muted);font-style:italic;padding:8px 0;">暂无启用的模型</p>`
+          }
+        </div>
       </div>
-    `).join('')}
+    `}).join('')}
   </div>
 </main>
 
 <footer><div class="ct">&copy; ${new Date().getFullYear()} <a href="${SITE_CONFIG.authorUrl}" target="_blank">${SITE_CONFIG.title}</a> by <a href="${SITE_CONFIG.blogUrl}" target="_blank">${SITE_CONFIG.author}</a></div></footer>
 
 <script>
+function toggleProvider(hdEl) {
+  const card = hdEl.closest('.home-provider-card');
+  if (card) {
+    card.classList.toggle('expanded');
+  }
+}
+
+function expandAllProviders() {
+  document.querySelectorAll('.home-provider-card').forEach(card => card.classList.add('expanded'));
+}
+
+function collapseAllProviders() {
+  document.querySelectorAll('.home-provider-card').forEach(card => card.classList.remove('expanded'));
+}
+
+function filterProviders(query) {
+  const q = query.trim().toLowerCase();
+  const cards = document.querySelectorAll('.home-provider-card');
+  let matchCount = 0;
+  cards.forEach(card => {
+    const pName = (card.getAttribute('data-name') || '').toLowerCase();
+    const pId = (card.getAttribute('data-id') || '').toLowerCase();
+    const tags = card.querySelectorAll('.tag');
+    let matchedInTags = 0;
+    tags.forEach(tag => {
+      const txt = (tag.getAttribute('data-model') || tag.textContent).toLowerCase();
+      if (!q || txt.includes(q)) {
+        tag.style.display = '';
+        matchedInTags++;
+      } else {
+        tag.style.display = 'none';
+      }
+    });
+
+    const isMatch = !q || pName.includes(q) || pId.includes(q) || matchedInTags > 0;
+    if (isMatch) {
+      card.style.display = '';
+      matchCount++;
+      if (q) {
+        card.classList.add('expanded');
+      }
+    } else {
+      card.style.display = 'none';
+    }
+  });
+
+  const emptyEl = document.getElementById('homeEmptySearch');
+  if (emptyEl) emptyEl.style.display = matchCount === 0 ? 'block' : 'none';
+}
+
 function copyText(t, el) {
-  const ic = el.tagName === 'I' ? el : el.querySelector('i')
-  const oc = ic.className
-  const os = ic.style.color
+  const ic = el.tagName === 'I' ? el : el.querySelector('i');
+  if (!ic) return;
+  const oc = ic.className;
+  const os = ic.style.color;
   navigator.clipboard.writeText(t).then(() => {
-    ic.className = 'fas fa-check'
-    ic.style.color = '#34d399'
+    ic.className = 'fas fa-check';
+    ic.style.color = '#34d399';
     setTimeout(() => {
-      ic.className = oc
-      ic.style.color = os
-    }, 3000)
-  }).catch(() => {})
+      ic.className = oc;
+      ic.style.color = os;
+    }, 2500);
+  }).catch(() => {});
 }
 </script>
 </body></html>`)
@@ -254,10 +337,20 @@ ${renderHeader(true, false)}
       <div class="fg"><label>API 地址</label><input type="url" id="aurl" placeholder="https://api.deepseek.com"></div>
       <div class="fg">
         <label>API 格式</label>
-        <select id="afmt">
+        <select id="afmt" onchange="onAfmtChange(this.value)">
           <option value="openai">OpenAI 兼容</option>
+          <option value="openai-oauth">OpenAI (OAuth 授权)</option>
           <option value="anthropic">Anthropic 兼容</option>
         </select>
+      </div>
+      <div id="aoauth-box" class="hd" style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <div>
+            <div style="font-size:0.82rem;font-weight:600;color:var(--zinc-200);"><i class="fab fa-openid" style="color:#10b981;"></i> 通过 OpenAI 快速授权</div>
+            <div style="font-size:0.74rem;color:var(--text-muted);margin-top:2px;">点击授权直接登录 ChatGPT/OpenAI，自动绑定到新提供商</div>
+          </div>
+          <button type="button" class="btn btn-p btn-xs" onclick="startOpenAIOAuth()"><i class="fas fa-sign-in-alt"></i> 登录授权</button>
+        </div>
       </div>
       <div class="fg">
         <label>API Keys</label>
@@ -319,7 +412,8 @@ ${renderHeader(true, false)}
               </div>
               <div class="pu">
                 <span><i class="fas fa-cubes"></i> ${p.models.length} 模型</span>
-                <span><i class="fas fa-code"></i> ${(p.apiType || 'openai') === 'anthropic' ? 'Anthropic' : 'OpenAI'}</span>
+                <span><i class="fas fa-code"></i> ${p.apiType === 'openai-oauth' ? 'OpenAI OAuth' : ((p.apiType || 'openai') === 'anthropic' ? 'Anthropic' : 'OpenAI')}</span>
+                ${p.apiKeys.some(k => k.type === 'openai-oauth') ? `<span class="bd bd-on" style="font-size:0.68rem;padding:1px 6px;margin-left:4px;"><i class="fab fa-openid"></i> OAuth</span>` : ''}
               </div>
             </div>
           </div>
@@ -348,15 +442,27 @@ ${renderHeader(true, false)}
           <div class="fg"><label>API 地址</label><input type="url" id="url-${p.id}" value="${p.baseUrl}"></div>
         </div>
         <div class="fr">
-          <div class="fg"><label>API 格式</label><select id="at-${p.id}" class="select-sm"><option value="openai" ${p.apiType==='openai'?'selected':''}>OpenAI 兼容</option><option value="anthropic" ${p.apiType==='anthropic'?'selected':''}>Anthropic 兼容</option></select></div>
+          <div class="fg"><label>API 格式</label><select id="at-${p.id}" class="select-sm" onchange="onEditFmtChange('${p.id}', this.value)"><option value="openai" ${p.apiType==='openai'?'selected':''}>OpenAI 兼容</option><option value="openai-oauth" ${p.apiType==='openai-oauth'?'selected':''}>OpenAI (OAuth 授权)</option><option value="anthropic" ${p.apiType==='anthropic'?'selected':''}>Anthropic 兼容</option></select></div>
           <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:4px;"><label class="tg" style="display:inline-flex;align-items:center;gap:8px;width:auto;height:auto;"><input type="checkbox" id="en-${p.id}" ${p.enabled?'checked':''} onchange="togglePb('${p.id}', this.checked)"><span class="sl"></span><span style="font-size:0.78rem;color:var(--zinc-300);text-transform:none;letter-spacing:0;font-weight:500;margin-left:4px;">已启用</span></label></div>
+        </div>
+        <div id="oauth-box-${p.id}" class="${p.apiType === 'openai-oauth' || p.apiKeys.some(k => k.type === 'openai-oauth') ? '' : 'hd'}" style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div>
+              <div style="font-size:0.82rem;font-weight:600;color:var(--zinc-200);"><i class="fab fa-openid" style="color:#10b981;"></i> OpenAI OAuth 授权绑定</div>
+              <div style="font-size:0.74rem;color:var(--text-muted);margin-top:2px;">
+                ${p.apiKeys.find(k => k.type === 'openai-oauth')?.email ? `已绑定账号: <strong>${escHtml(p.apiKeys.find(k => k.type === 'openai-oauth')?.email || '')}</strong>` : '连接 ChatGPT / OpenAI 官方账号自动获取访问令牌与轮换'}
+              </div>
+            </div>
+            <button type="button" class="btn btn-p btn-xs" onclick="startOpenAIOAuth('${p.id}')"><i class="fas fa-sync-alt"></i> ${p.apiKeys.some(k => k.type === 'openai-oauth') ? '重新授权' : '立即授权'}</button>
+          </div>
         </div>
         <div class="fg">
           <label>API Keys</label>
           <div id="keys-${p.id}">
             ${p.apiKeys.map((k, ki) => `
               <div data-kidx="${ki}" style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:rgba(9,9,11,0.4);border:1px solid rgba(63,63,70,0.3);margin-bottom:6px;">
-                <input type="text" value="${escHtml(k.key)}" class="fx1" id="k-${p.id}-${ki}" placeholder="API Key" style="font-family:'SF Mono','Fira Code','JetBrains Mono',monospace;font-size:0.78rem;">
+                <input type="text" value="${escHtml(k.key)}" class="fx1" id="k-${p.id}-${ki}" placeholder="API Key" style="font-family:'SF Mono','Fira Code','JetBrains Mono',monospace;font-size:0.78rem;" ${k.type === 'openai-oauth' ? 'readonly' : ''}>
+                ${k.type === 'openai-oauth' ? `<span style="font-size:0.72rem;color:#10b981;background:rgba(16,185,129,0.1);padding:2px 6px;border-radius:4px;white-space:nowrap;"><i class="fab fa-openid"></i> ${escHtml(k.email || 'OAuth')}</span>` : ''}
                 <label class="tg"><input type="checkbox" ${k.enabled ? 'checked' : ''} id="ken-${p.id}-${ki}"><span class="sl"></span></label>
                 <button class="btn btn-gh btn-xs" onclick="testKeyRow('${p.id}',${ki})" title="测试"><i class="fas fa-plug"></i></button>
                 <button class="btn btn-gh btn-xs" onclick="rmKeyRow('${p.id}',${ki})"><i class="fas fa-times c-muted"></i></button>
@@ -1017,7 +1123,7 @@ async function save(id) {
   var r = await fetch('/admin/api/providers/' + encodeURIComponent(id), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: nm, baseUrl: url, apiType: apiType, apiKeys: keys, models: models, enabled: enabled })
+    body: JSON.stringify({ name: nm, baseUrl: url, apiType: apiType, apiKeys: keys, models: models, enabled: enabled, preserveOAuthCredentials: true })
   })
   var d = await r.json()
   if (d.success) { closeProviderEditor(); toast('已保存', 'success'); location.reload() }
@@ -1290,6 +1396,47 @@ function copyText(t, el) {
     }, 3000)
   }).catch(function() {})
 }
+
+// ── OpenAI OAuth ──
+function onAfmtChange(val) {
+  var box = document.getElementById('aoauth-box')
+  if (box) {
+    if (val === 'openai-oauth') box.classList.remove('hd')
+    else box.classList.add('hd')
+  }
+}
+
+function onEditFmtChange(id, val) {
+  var box = document.getElementById('oauth-box-' + id)
+  if (box) {
+    if (val === 'openai-oauth') box.classList.remove('hd')
+    else box.classList.add('hd')
+  }
+}
+
+async function startOpenAIOAuth(providerId) {
+  var url = '/admin/api/oauth/openai/start' + (providerId ? '?providerId=' + encodeURIComponent(providerId) : '')
+  try {
+    var r = await fetch(url)
+    var d = await r.json()
+    if (d.success && d.data && d.data.authUrl) {
+      window.open(d.data.authUrl, 'openai_oauth', 'width=620,height=750,menubar=no,toolbar=no')
+    } else {
+      toast(d.message || '获取授权链接失败', 'error')
+    }
+  } catch (e) {
+    toast('网络请求失败', 'error')
+  }
+}
+
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'openai_oauth_success') {
+    toast('OpenAI OAuth 授权成功！正在刷新...', 'success')
+    setTimeout(function() { location.reload() }, 1500)
+  } else if (e.data && e.data.type === 'openai_oauth_error') {
+    toast('OpenAI 授权失败: ' + (e.data.message || '未知错误'), 'error')
+  }
+})
 
 // ── Init ──
 loadHealth()

@@ -1,7 +1,8 @@
 import { Context } from 'hono'
 import { getProvider, getProviders, autoPauseProvider, disableProviderKey, recordCallEnd, recordCallStart } from './storage'
 import { KV_KEYS, KEY_HEALTH_COOLDOWN_MS } from './config'
-import type { CallStatusRecord, Env, Provider, ProxyRequestBody } from './types'
+import type { CallStatusRecord, Env, Provider, ProviderApiType, ProxyRequestBody } from './types'
+import { refreshOpenAIToken, resolveProviderKeyToken } from './oauth'
 
 // ===== Key 健康状态类型和辅助函数 =====
 
@@ -42,7 +43,7 @@ function parseRetryAfterMs(response: Response): number | null {
   return null
 }
 
-async function readUpstreamError(response: Response): Promise<string> {
+export async function readUpstreamError(response: Response): Promise<string> {
   try {
     const body = await response.clone().text()
     if (!body) return ''
@@ -156,7 +157,8 @@ export async function testModelConnection(
   baseUrl: string,
   apiKey: string,
   modelId: string,
-  apiType?: 'openai' | 'anthropic'
+  apiType?: ProviderApiType,
+  extraHeaders?: Record<string, string>
 ): Promise<{ success: boolean; message: string; statusCode?: number }> {
   const normalizedApiKey = normalizeProviderApiKey(apiKey)
   try {
@@ -165,6 +167,7 @@ export async function testModelConnection(
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...extraHeaders,
     }
     if (apiType === 'anthropic') {
       headers['x-api-key'] = normalizedApiKey
@@ -305,8 +308,8 @@ async function tryProvider(
   const subPath = url.pathname.replace(/^\/v1\//, '') || 'chat/completions'
   const forwardUrls = buildEndpointUrls(provider.baseUrl, subPath, url.search)
 
-  // 按健康状态排序 key
-  const healthData = await readHealth(c.env, provider.id)
+  // 按健康状态排序 key（单 Key 时无需读取健康记录）
+  const healthData = enabledKeys.length > 1 ? await readHealth(c.env, provider.id) : {}
   const healthy: number[] = []
   const unhealthy: number[] = []
   const probation: number[] = []
@@ -343,7 +346,8 @@ async function tryProvider(
   let healthUpdated = false
 
   for (const keyIndex of keyOrder) {
-    const apiKey = enabledKeys[keyIndex].key
+    const keyEntry = enabledKeys[keyIndex]
+    const apiKey = keyEntry.key
     const callRecord = createCallRecord(c, provider, apiKey, modelId, requestedModel, forwardBody)
     await recordCallStart(c.env, callRecord).catch(() => {})
     let callClosed = false
@@ -357,7 +361,21 @@ async function tryProvider(
       const forwardHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
       }
-      const normalizedApiKey = normalizeProviderApiKey(apiKey)
+      let tokenToUse = apiKey
+      const isOAuth = keyEntry.type === 'openai-oauth' || provider.apiType === 'openai-oauth'
+      if (isOAuth) {
+        const resolved = await resolveProviderKeyToken(c.env, provider.id, keyEntry)
+        if (!resolved) {
+          await finishCall('error', 401, 'OAuth 凭据失效或未能获取访问令牌')
+          continue
+        }
+        tokenToUse = resolved.token
+        if (resolved.chatgptAccountId) {
+          forwardHeaders['ChatGPT-Account-Id'] = resolved.chatgptAccountId
+        }
+      }
+
+      const normalizedApiKey = normalizeProviderApiKey(tokenToUse)
       if (provider.apiType === 'anthropic') {
         forwardHeaders['x-api-key'] = normalizedApiKey
         forwardHeaders['anthropic-version'] = '2023-06-01'
@@ -386,6 +404,34 @@ async function tryProvider(
       if (!response) {
         await finishCall('error', 502, '上游无响应')
         continue
+      }
+
+      // 遇到 401 时，若为 OAuth 账号则尝试自动刷新令牌并重试一次
+      if (response.status === 401 && isOAuth && keyEntry.refreshToken) {
+        const refreshed = await refreshOpenAIToken(c.env, provider.id, keyEntry)
+        if (refreshed) {
+          const resolvedNew = await resolveProviderKeyToken(c.env, provider.id, refreshed)
+          if (resolvedNew) {
+            forwardHeaders['Authorization'] = `Bearer ${normalizeProviderApiKey(resolvedNew.token)}`
+            if (resolvedNew.chatgptAccountId) {
+              forwardHeaders['ChatGPT-Account-Id'] = resolvedNew.chatgptAccountId
+            }
+            for (let i = 0; i < forwardUrls.length; i++) {
+              const retryCurrent = await fetch(forwardUrls[i], {
+                method: c.req.method,
+                headers: forwardHeaders,
+                body: JSON.stringify(forwardBody),
+                signal: AbortSignal.timeout(60000),
+              })
+              if (retryCurrent.status === 404 && i < forwardUrls.length - 1) {
+                response = retryCurrent
+                continue
+              }
+              response = retryCurrent
+              break
+            }
+          }
+        }
       }
 
       if (response.ok) {

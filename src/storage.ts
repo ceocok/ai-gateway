@@ -1,14 +1,34 @@
 import { KV_KEYS } from './config'
-import type { CallStatusRecord, Env, Provider, ProviderHealth, ProxyKey, Session } from './types'
+import type { ApiKeyEntry, CallStatusRecord, Env, OpenAIOAuthSession, Provider, ProviderHealth, ProxyKey, Session } from './types'
 
 const CALL_STATUS_LIMIT = 30
 const CALL_STATUS_TTL_SECONDS = 60 * 60 * 2
 
+// ===== 模块级缓存 =====
+// 减少同一 isolate 内重复 KV 读取，写入时自动失效。
+const CACHE_TTL_MS = 5000
+
+let providersCache: Provider[] | null = null
+let providersCacheTime = 0
+
+let proxyKeysCache: ProxyKey[] | null = null
+let proxyKeysCacheTime = 0
+
+function cacheValid(cacheTime: number): boolean {
+  return Date.now() - cacheTime < CACHE_TTL_MS
+}
+
 // ===== 提供商 CRUD =====
 
 export async function getProviders(env: Env): Promise<Provider[]> {
+  if (providersCache && cacheValid(providersCacheTime)) {
+    return providersCache
+  }
   const data = await env.KV.get(KV_KEYS.PROVIDERS)
-  return data ? JSON.parse(data) : []
+  const parsed: Provider[] = data ? JSON.parse(data) : []
+  providersCache = parsed
+  providersCacheTime = Date.now()
+  return parsed
 }
 
 export async function getProvider(env: Env, id: string): Promise<Provider | null> {
@@ -18,6 +38,8 @@ export async function getProvider(env: Env, id: string): Promise<Provider | null
 
 export async function setProviders(env: Env, providers: Provider[]): Promise<void> {
   await env.KV.put(KV_KEYS.PROVIDERS, JSON.stringify(providers))
+  providersCache = providers
+  providersCacheTime = Date.now()
 }
 
 export async function addProvider(env: Env, provider: Provider): Promise<void> {
@@ -59,6 +81,18 @@ export async function deleteProvider(env: Env, id: string): Promise<boolean> {
   return true
 }
 
+export async function updateProviderOAuthKey(
+  env: Env,
+  providerId: string,
+  updatedKey: ApiKeyEntry
+): Promise<boolean> {
+  const providers = await getProviders(env)
+  const index = providers.findIndex((p) => p.id === providerId)
+  if (index === -1) return false
+  const apiKeys = providers[index].apiKeys.map((k) => (k.key === updatedKey.key ? updatedKey : k))
+  const updated = await updateProvider(env, providerId, { apiKeys })
+  return updated !== null
+}
 
 // ===== Provider 健康状态 =====
 
@@ -206,15 +240,45 @@ export async function deleteSession(env: Env, sessionId: string): Promise<void> 
   await env.KV.delete(KV_KEYS.SESSION_PREFIX + sessionId)
 }
 
+// ===== OpenAI OAuth 临时会话 =====
+
+export async function createOpenAIOAuthSession(
+  env: Env,
+  sessionId: string,
+  session: OpenAIOAuthSession,
+  ttlSeconds: number,
+): Promise<void> {
+  await env.KV.put(KV_KEYS.OPENAI_OAUTH_SESSION_PREFIX + sessionId, JSON.stringify(session), {
+    expirationTtl: ttlSeconds,
+  })
+}
+
+export async function getOpenAIOAuthSession(env: Env, sessionId: string): Promise<OpenAIOAuthSession | null> {
+  const raw = await env.KV.get(KV_KEYS.OPENAI_OAUTH_SESSION_PREFIX + sessionId)
+  return raw ? JSON.parse(raw) as OpenAIOAuthSession : null
+}
+
+export async function deleteOpenAIOAuthSession(env: Env, sessionId: string): Promise<void> {
+  await env.KV.delete(KV_KEYS.OPENAI_OAUTH_SESSION_PREFIX + sessionId)
+}
+
 // ===== 转发 Key =====
 
 export async function getProxyKeys(env: Env): Promise<ProxyKey[]> {
+  if (proxyKeysCache && cacheValid(proxyKeysCacheTime)) {
+    return proxyKeysCache
+  }
   const data = await env.KV.get(KV_KEYS.PROXY_KEYS)
-  return data ? JSON.parse(data) : []
+  const parsed: ProxyKey[] = data ? JSON.parse(data) : []
+  proxyKeysCache = parsed
+  proxyKeysCacheTime = Date.now()
+  return parsed
 }
 
 export async function setProxyKeys(env: Env, keys: ProxyKey[]): Promise<void> {
   await env.KV.put(KV_KEYS.PROXY_KEYS, JSON.stringify(keys))
+  proxyKeysCache = keys
+  proxyKeysCacheTime = Date.now()
 }
 
 export async function addProxyKey(env: Env, key: ProxyKey): Promise<void> {

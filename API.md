@@ -260,7 +260,7 @@ Session 过期返回 `401`：
 | `id` | ❌ | 提供商唯一标识；默认根据 `baseUrl` 域名自动生成，冲突时自动追加数字后缀 |
 | `name` | ✅ | 显示名称 |
 | `baseUrl` | ✅ | 提供商 API 基础地址，尾部 `/` 会被自动去除 |
-| `apiType` | ❌ | `openai`（默认）或 `anthropic` |
+| `apiType` | ❌ | `openai`（默认）、`anthropic` 或 `openai-oauth` |
 | `apiKeys` | ❌ | 字符串数组或 `{key, enabled}` 对象数组 |
 | `models` | ❌ | 字符串数组或 `{id, enabled}` 对象数组 |
 | `enabled` | ❌ | 默认 `true` |
@@ -273,7 +273,7 @@ Session 过期返回 `401`：
 
 #### PUT /admin/api/providers/:id
 
-更新提供商配置。`name`、`baseUrl`、`apiType` 等字段均可更新，内部 `id` 保持不变，`updatedAt` 自动刷新。
+更新提供商配置。`name`、`baseUrl`、`apiType` 等字段均可更新，内部 `id` 保持不变，`updatedAt` 自动刷新。支持 `preserveOAuthCredentials: true` 保留已有服务端 OAuth 凭据。
 
 **请求体**（所有字段可选）:
 ```json
@@ -419,6 +419,36 @@ Session 过期返回 `401`：
 ```json
 { "success": true, "message": "转发 Key 已删除" }
 ```
+
+---
+
+### OpenAI OAuth 授权端点
+
+#### GET /admin/api/oauth/openai/start
+
+发起 OpenAI OAuth 2.0 PKCE 授权流程。生成防重放 state 与加密 code_verifier，返回构造好的授权地址。
+
+**查询参数**:
+- `providerId`（可选，默认 `openai`）: 授权完成后绑定的目标提供商 ID
+- `clientId`（可选）: 自定义 OAuth Client ID
+- `direct`（可选，传 `1` 时直接 302 重定向至 OpenAI 授权页）
+
+**成功响应** (`200`):
+```json
+{
+  "success": true,
+  "data": {
+    "authUrl": "https://auth.openai.com/api/accounts/authorize?client_id=...&state=...",
+    "state": "..."
+  }
+}
+```
+
+---
+
+#### GET /admin/oauth/openai/callback
+
+OpenAI 登录后的重定向回调端点。校验 state，使用解密后的 code_verifier 向 OpenAI 换取 access_token / refresh_token，并自动安全加密存储至目标提供商凭据中，同时支持向打开该弹窗的父窗口发送 postMessage 通知。
 
 ---
 

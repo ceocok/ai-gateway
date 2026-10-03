@@ -20,6 +20,8 @@ import {
   handleCreateProxyKey,
   handleUpdateProxyKey,
   handleDeleteProxyKey,
+  handleOpenAIOAuthStart,
+  handleOpenAIOAuthCallback,
 } from './admin'
 import { renderHomePage, renderLoginPage, renderAdminPage } from './pages'
 import { seedInitialData, getSession } from './storage'
@@ -82,6 +84,10 @@ app.get('/admin/api/proxy-keys', handleGetProxyKeys)
 app.post('/admin/api/proxy-keys', handleCreateProxyKey)
 app.delete('/admin/api/proxy-keys/:id', handleDeleteProxyKey)
 app.patch('/admin/api/proxy-keys/:id', handleUpdateProxyKey)
+
+// OpenAI OAuth 授权
+app.get('/admin/api/oauth/openai/start', handleOpenAIOAuthStart)
+app.get('/admin/oauth/openai/callback', handleOpenAIOAuthCallback)
 
 // ===== API 转发路由 =====
 // 模型目录允许公开读取，实际模型调用仍必须通过转发 Key 验证。

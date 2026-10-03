@@ -26,7 +26,16 @@ export const KV_KEYS = {
   PROVIDER_HEALTH_PREFIX: 'provider:health:',
   CALL_STATUS_PREFIX: 'call:status:',
   CALL_STATUS_RECENT: 'call:status:recent',
+  OPENAI_OAUTH_SESSION_PREFIX: 'openai:oauth:session:',
 } as const
+
+export const OPENAI_OAUTH_CONFIG = {
+  AUTHORIZE_URL: 'https://auth.openai.com/api/accounts/authorize',
+  TOKEN_URL: 'https://auth.openai.com/api/accounts/oauth/token',
+  DEFAULT_CLIENT_ID: 'dynamic_agent_client',
+  SCOPE: 'openid profile email offline_access model.request',
+  SESSION_TTL: 10 * 60, // 10 分钟临时会话
+}
 
 // 有效期选项（秒）
 export const EXPIRY_OPTIONS: Record<string, number | null> = {
