@@ -460,12 +460,15 @@ ${renderHeader(true, false)}
       <div class="fg">
         <div class="model-field-head">
           <label>模型</label>
-          <div style="display:flex;align-items:center;gap:6px;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <button class="btn btn-gh btn-xs" type="button" onclick="prefillAddModels()">
               <i class="fas fa-sparkles"></i> 预填最新模型
             </button>
             <button class="btn btn-gh btn-xs" id="adiscover" onclick="discoverModels()">
               <i class="fas fa-cloud-download-alt"></i> 获取模型
+            </button>
+            <button class="btn btn-gh btn-xs" type="button" onclick="clearAddModels()" title="清空全部已添加模型" style="color:var(--danger);">
+              <i class="fas fa-trash-alt"></i> 清空全部
             </button>
           </div>
         </div>
@@ -475,7 +478,7 @@ ${renderHeader(true, false)}
           <div class="fc mb-4"><input type="text" placeholder="deepseek-chat" class="fx1 ami">
             <label class="tg"><input type="checkbox" checked class="ame"><span class="sl"></span></label>
             <button class="btn btn-gh btn-xs" onclick="testNewMdl(this)" title="测试"><i class="fas fa-plug"></i></button>
-            <button class="btn btn-gh btn-xs" onclick="this.parentElement.remove()"><i class="fas fa-times c-muted"></i></button>
+            <button class="btn btn-gh btn-xs" onclick="rmNewMdlRow(this)"><i class="fas fa-times c-muted"></i></button>
           </div>
         </div>
         <button class="btn btn-gh btn-xs" onclick="addMdlRow()"><i class="fas fa-plus"></i> 添加一行</button>
@@ -575,12 +578,15 @@ ${renderHeader(true, false)}
         <div class="fg">
           <div class="model-field-head">
             <label>模型</label>
-            <div style="display:flex;align-items:center;gap:6px;">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
               <button class="btn btn-gh btn-xs" type="button" onclick="prefillLatestModels('${escHtml(p.id)}')">
                 <i class="fas fa-sparkles"></i> 预填最新模型
               </button>
               <button class="btn btn-gh btn-xs" id="mdiscover-${p.id}" onclick="discoverProviderModels('${escHtml(p.id)}')">
                 <i class="fas fa-cloud-download-alt"></i> 获取模型
+              </button>
+              <button class="btn btn-gh btn-xs" type="button" onclick="clearAllModels('${escHtml(p.id)}')" title="清空下方已添加的全部模型" style="color:var(--danger);">
+                <i class="fas fa-trash-alt"></i> 清空全部
               </button>
             </div>
           </div>
@@ -914,23 +920,54 @@ function setDiscoveredSelection(checked) {
 }
 
 // ── Add form: model rows ──
+function rmNewMdlRow(btn) {
+  const row = btn.closest('.fc') || btn.parentElement
+  if (!row) return
+  if (row.nextElementSibling && row.nextElementSibling.classList.contains('amdl-inline-res')) {
+    row.nextElementSibling.remove()
+  }
+  row.remove()
+  const amp = document.getElementById('amc')
+  if (amp && !amp.classList.contains('hd') && amp.dataset.models) {
+    try { renderDiscoveredModels(JSON.parse(amp.dataset.models)) } catch(e) {}
+  }
+}
+
 function addMdlRow() {
   const c = document.getElementById('amodels')
   const d = document.createElement('div')
   d.className = 'fc mb-4'
-  d.innerHTML = '<input type="text" placeholder="deepseek-chat" class="fx1 ami"><label class="tg"><input type="checkbox" checked class="ame"><span class="sl"></span></label><button class="btn btn-gh btn-xs" onclick="testNewMdl(this)" title="测试"><i class="fas fa-plug"></i></button><button class="btn btn-gh btn-xs" onclick="this.parentElement.remove()"><i class="fas fa-times c-muted"></i></button>'
+  d.innerHTML = '<input type="text" placeholder="deepseek-chat" class="fx1 ami"><label class="tg"><input type="checkbox" checked class="ame"><span class="sl"></span></label><button class="btn btn-gh btn-xs" onclick="testNewMdl(this)" title="测试"><i class="fas fa-plug"></i></button><button class="btn btn-gh btn-xs" onclick="rmNewMdlRow(this)"><i class="fas fa-times c-muted"></i></button>'
   c.appendChild(d)
 }
 
 function testNewMdl(btn) {
-  const inp = btn.parentElement.querySelector('.ami'), mid = inp.value.trim()
+  const row = btn.closest('.fc') || btn.parentElement
+  const inp = row ? row.querySelector('.ami') : null
+  const mid = inp ? inp.value.trim() : ''
   if (!mid) { toast('请输入模型 ID', 'error'); return }
   const url = document.getElementById('aurl').value.trim()
   const akeys = document.querySelectorAll('#akeys .aki')
   const apiKey = Array.from(akeys).map(function(inp) { return inp.value.trim() }).filter(Boolean)[0] || 'dummy'
   const apiType = document.getElementById('afmt').value
   const tr = document.getElementById('atestR')
-  tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 测试中...</span>'
+
+  btn.disabled = true
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'
+  btn.title = '测试中...'
+
+  let resEl = row.nextElementSibling && row.nextElementSibling.classList.contains('amdl-inline-res') ? row.nextElementSibling : null
+  if (!resEl && row && row.parentNode) {
+    resEl = document.createElement('div')
+    resEl.className = 'amdl-inline-res'
+    row.parentNode.insertBefore(resEl, row.nextSibling)
+  }
+  if (resEl) {
+    resEl.innerHTML = '<div class="al al-i" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;"><i class="fas fa-spinner fa-spin"></i> 正在测试模型「' + escHtml(mid) + '」...</div>'
+    resEl.classList.remove('hd')
+  }
+  if (tr) tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 正在测试模型「' + escHtml(mid) + '」...</span>'
+
   fetch('/admin/api/providers/probe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -938,14 +975,66 @@ function testNewMdl(btn) {
   }).then(async function(r) {
     const d = await r.json()
     const result = d.data || {}
-    tr.innerHTML = d.success && result.success
-      ? '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
-      : '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
-    setTimeout(function() { tr.innerHTML = '' }, 5000)
+    const isSuccess = Boolean(d.success && result.success)
+    const code = result.statusCode || (isSuccess ? 200 : 500)
+    const msg = result.message || d.message || (isSuccess ? '连接成功' : '测试失败')
+
+    if (isSuccess) {
+      btn.innerHTML = '<i class="fas fa-check" style="color:#10b981;"></i>'
+      btn.title = '连接成功 (HTTP ' + code + ')'
+      if (resEl) {
+        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> 模型「' + escHtml(mid) + '」连接成功 (HTTP ' + code + ')</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="this.closest(\'.amdl-inline-res\').remove()"></i></div>'
+      }
+      toast('模型「' + mid + '」连接成功 (HTTP ' + code + ')', 'success')
+      if (tr) tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 模型「' + escHtml(mid) + '」连接成功 (HTTP ' + code + ')</div>'
+    } else {
+      btn.innerHTML = '<i class="fas fa-times" style="color:#ef4444;"></i>'
+      btn.title = '测试失败'
+      if (resEl) {
+        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> 模型「' + escHtml(mid) + '」测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="this.closest(\'.amdl-inline-res\').remove()"></i></div>'
+      }
+      toast('模型「' + mid + '」测试失败: ' + msg.substring(0, 50), 'error')
+      if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + escHtml(msg) + '</div>'
+    }
+    setTimeout(function() {
+      btn.innerHTML = '<i class="fas fa-plug"></i>'
+      btn.title = '测试'
+      btn.disabled = false
+      if (tr) tr.innerHTML = ''
+    }, 6000)
   }).catch(function() {
-    tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
-    setTimeout(function() { tr.innerHTML = '' }, 5000)
+    btn.innerHTML = '<i class="fas fa-times" style="color:#ef4444;"></i>'
+    btn.title = '请求失败'
+    if (resEl) {
+      resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;"><i class="fas fa-times-circle"></i> 请求异常</div>'
+    }
+    toast('模型「' + mid + '」请求失败', 'error')
+    if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 请求失败</div>'
+    setTimeout(function() {
+      btn.innerHTML = '<i class="fas fa-plug"></i>'
+      btn.title = '测试'
+      btn.disabled = false
+      if (tr) tr.innerHTML = ''
+    }, 6000)
   })
+}
+
+async function clearAddModels() {
+  const c = document.getElementById('amodels')
+  if (!c) return
+  const rows = c.querySelectorAll('.fc')
+  if (rows.length === 0) {
+    toast('当前列表中没有模型', 'info')
+    return
+  }
+  if (!(await cM('确定要清空已添加的全部 ' + rows.length + ' 个模型吗？'))) return
+  c.innerHTML = ''
+  document.querySelectorAll('.amdl-inline-res').forEach(function(el) { el.remove() })
+  const amp = document.getElementById('amc')
+  if (amp && !amp.classList.contains('hd') && amp.dataset.models) {
+    try { renderDiscoveredModels(JSON.parse(amp.dataset.models)) } catch(e) {}
+  }
+  toast('已清空全部模型', 'success')
 }
 
 // ── Create provider ──
@@ -1021,18 +1110,37 @@ function addKeyRow(id) {
 
 function rmKeyRow(id, idx) {
   const c = document.getElementById('keys-' + id)
-  c.querySelectorAll('[data-kidx]').forEach(function(item) {
-    if (parseInt(item.dataset.kidx) === idx) item.remove()
-  })
+  if (c) {
+    c.querySelectorAll('[data-kidx]').forEach(function(item) {
+      if (parseInt(item.dataset.kidx) === idx) item.remove()
+    })
+  }
+  const kres = document.getElementById('kres-' + id + '-' + idx)
+  if (kres) kres.remove()
 }
 
 async function testKeyRow(id, idx) {
-  const k = document.getElementById('k-' + id + '-' + idx).value.trim()
+  const kInp = document.getElementById('k-' + id + '-' + idx)
+  const k = kInp ? kInp.value.trim() : ''
   const url = document.getElementById('url-' + id).value.trim()
   if (!k) { toast('请输入 API Key', 'error'); return }
   const apiType = document.getElementById('at-' + id).value
   const tr = document.getElementById('tr-' + id)
-  tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 测试中...</span>'
+  const row = kInp ? kInp.closest('[data-kidx]') : null
+
+  let resEl = document.getElementById('kres-' + id + '-' + idx)
+  if (!resEl && row && row.parentNode) {
+    resEl = document.createElement('div')
+    resEl.id = 'kres-' + id + '-' + idx
+    resEl.className = 'key-test-inline-res'
+    row.parentNode.insertBefore(resEl, row.nextSibling)
+  }
+  if (resEl) {
+    resEl.innerHTML = '<div class="al al-i" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;"><i class="fas fa-spinner fa-spin"></i> 正在测试 Key 连接...</div>'
+    resEl.classList.remove('hd')
+  }
+  if (tr) tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 测试 Key 中...</span>'
+
   try {
     const r = await fetch('/admin/api/providers/probe', {
       method: 'POST',
@@ -1041,13 +1149,31 @@ async function testKeyRow(id, idx) {
     })
     const d = await r.json()
     const result = d.data || {}
-    tr.innerHTML = d.success && result.success
-      ? '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
-      : '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
-    setTimeout(function() { tr.innerHTML = '' }, 5000)
+    const isSuccess = Boolean(d.success && result.success)
+    const code = result.statusCode || (isSuccess ? 200 : 500)
+    const msg = result.message || d.message || (isSuccess ? '连接成功' : '连接失败')
+
+    if (isSuccess) {
+      if (resEl) {
+        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> Key 连接成功' + (code ? ' (HTTP ' + code + ')' : '') + '</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="this.closest(\'#kres-' + id + '-' + idx + '\').remove()"></i></div>'
+      }
+      toast('Key 连接成功 (HTTP ' + code + ')', 'success')
+      if (tr) tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> Key 连接成功 (HTTP ' + code + ')</div>'
+    } else {
+      if (resEl) {
+        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> Key 测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="this.closest(\'#kres-' + id + '-' + idx + '\').remove()"></i></div>'
+      }
+      toast('Key 测试失败: ' + msg.substring(0, 50), 'error')
+      if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + escHtml(msg) + '</div>'
+    }
+    setTimeout(function() { if (tr) tr.innerHTML = '' }, 6000)
   } catch (e) {
-    tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
-    setTimeout(function() { tr.innerHTML = '' }, 5000)
+    if (resEl) {
+      resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;"><i class="fas fa-times-circle"></i> 连接失败</div>'
+    }
+    toast('Key 测试请求失败', 'error')
+    if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
+    setTimeout(function() { if (tr) tr.innerHTML = '' }, 6000)
   }
 }
 
@@ -1245,32 +1371,123 @@ function addMdlValue(id, mid, enabled) {
 
 function rmMdl(id, idx) {
   const c = document.getElementById('ml-' + id)
-  c.querySelectorAll('[data-idx]').forEach(function(item) {
-    if (parseInt(item.dataset.idx) === idx) item.remove()
-  })
+  if (c) {
+    c.querySelectorAll('[data-idx]').forEach(function(item) {
+      if (parseInt(item.dataset.idx) === idx) item.remove()
+    })
+  }
+  const resEl = document.getElementById('mres-' + id + '-' + idx)
+  if (resEl) resEl.remove()
+  const mp = document.getElementById('mp-' + id)
+  if (mp && !mp.classList.contains('hd') && mp.dataset.models) {
+    try { renderEditDiscoveredModels(id, JSON.parse(mp.dataset.models)) } catch(e) {}
+  }
+}
+
+async function clearAllModels(id) {
+  const c = document.getElementById('ml-' + id)
+  if (!c) return
+  const rows = c.querySelectorAll('[data-idx]')
+  if (rows.length === 0) {
+    toast('当前列表中没有模型', 'info')
+    return
+  }
+  if (!(await cM('确定要清空已添加的全部 ' + rows.length + ' 个模型吗？\n（需点击下方「保存」后正式生效）'))) return
+  c.innerHTML = ''
+  document.querySelectorAll('[id^="mres-' + id + '-"]').forEach(function(el) { el.remove() })
+  const mp = document.getElementById('mp-' + id)
+  if (mp && !mp.classList.contains('hd') && mp.dataset.models) {
+    try { renderEditDiscoveredModels(id, JSON.parse(mp.dataset.models)) } catch(e) {}
+  }
+  toast('已清空全部模型（需点击下方保存生效）', 'success')
 }
 
 async function testMdl(id, mid, idx) {
+  const midInp = document.getElementById('mid-' + id + '-' + idx)
+  const targetMid = (midInp ? midInp.value.trim() : '') || mid
+  if (!targetMid) {
+    toast('请输入或选择模型 ID', 'error')
+    return
+  }
+  const btn = document.getElementById('tm-' + id + '-' + idx)
   const tr = document.getElementById('tr-' + id)
-  tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 测试中...</span>'
+  const row = midInp ? midInp.closest('[data-idx]') : null
+
+  let resEl = document.getElementById('mres-' + id + '-' + idx)
+  if (!resEl && row && row.parentNode) {
+    resEl = document.createElement('div')
+    resEl.id = 'mres-' + id + '-' + idx
+    resEl.className = 'model-test-inline-res'
+    row.parentNode.insertBefore(resEl, row.nextSibling)
+  }
+  if (resEl) {
+    resEl.innerHTML = '<div class="al al-i" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;"><i class="fas fa-spinner fa-spin"></i> 正在测试模型「' + escHtml(targetMid) + '」...</div>'
+    resEl.classList.remove('hd')
+  }
+  if (btn) {
+    btn.disabled = true
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'
+    btn.title = '测试中...'
+  }
+  if (tr) tr.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> 测试模型「' + escHtml(targetMid) + '」中...</span>'
+
   try {
     const r = await fetch('/admin/api/providers/' + encodeURIComponent(id) + '/test-model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelId: mid })
+      body: JSON.stringify({ modelId: targetMid })
     })
     const d = await r.json()
-    if (d.success && d.data) {
-      tr.innerHTML = d.data.success
-        ? '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功 (HTTP ' + d.data.statusCode + ')</div>'
-        : '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (d.data.message || '连接失败') + '</div>'
+    const result = d.data || {}
+    const isSuccess = Boolean(d.success && result.success)
+    const code = result.statusCode || (isSuccess ? 200 : (r.status !== 200 ? r.status : null))
+    const msg = result.message || d.message || (isSuccess ? '连接成功' : '连接失败')
+
+    if (isSuccess) {
+      if (btn) {
+        btn.innerHTML = '<i class="fas fa-check" style="color:#22c55e;"></i>'
+        btn.title = '连接成功 (HTTP ' + (code || 200) + ')'
+      }
+      if (resEl) {
+        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> 模型「' + escHtml(targetMid) + '」连接成功' + (code ? ' (HTTP ' + code + ')' : '') + '</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="this.closest(\'#mres-' + id + '-' + idx + '\').remove()"></i></div>'
+      }
+      toast('模型「' + targetMid + '」连接成功 (HTTP ' + (code || 200) + ')', 'success')
+      if (tr) tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 模型「' + escHtml(targetMid) + '」连接成功 (HTTP ' + (code || 200) + ')</div>'
     } else {
-      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (d.message || '测试失败') + '</div>'
+      if (btn) {
+        btn.innerHTML = '<i class="fas fa-times" style="color:#ef4444;"></i>'
+        btn.title = '测试失败'
+      }
+      if (resEl) {
+        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> 模型「' + escHtml(targetMid) + '」测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="this.closest(\'#mres-' + id + '-' + idx + '\').remove()"></i></div>'
+      }
+      toast('模型「' + targetMid + '」测试失败: ' + msg.substring(0, 50), 'error')
+      if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + escHtml(msg) + '</div>'
     }
-    setTimeout(function() { tr.innerHTML = '' }, 5000)
+    setTimeout(function() {
+      if (btn) {
+        btn.innerHTML = '<i class="fas fa-plug"></i>'
+        btn.title = '测试'
+        btn.disabled = false
+      }
+      if (tr) tr.innerHTML = ''
+    }, 6000)
   } catch (e) {
-    tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 请求失败</div>'
-    setTimeout(function() { tr.innerHTML = '' }, 5000)
+    if (btn) {
+      btn.innerHTML = '<i class="fas fa-times" style="color:#ef4444;"></i>'
+      btn.title = '请求失败'
+      setTimeout(function() {
+        btn.innerHTML = '<i class="fas fa-plug"></i>'
+        btn.title = '测试'
+        btn.disabled = false
+      }, 6000)
+    }
+    if (resEl) {
+      resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;"><i class="fas fa-times-circle"></i> 请求异常: ' + escHtml(e.message || String(e)) + '</div>'
+    }
+    toast('模型「' + targetMid + '」请求失败', 'error')
+    if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 请求失败</div>'
+    setTimeout(function() { if (tr) tr.innerHTML = '' }, 6000)
   }
 }
 
