@@ -5,7 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 keep_vars = true
 
 [placement]
-mode = "smart"
+mode = "targeted"
+region = "aws:us-east-1"
 
 # KV namespace — wrangler will auto-resolve by name
 [[kv_namespaces]]
