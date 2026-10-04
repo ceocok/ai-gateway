@@ -1,7 +1,7 @@
 import { Context } from 'hono'
 import { getProviders, getProxyKeys } from './storage'
 import { SITE_CONFIG, DEFAULT_PROVIDER_MODELS } from './config'
-import type { Env } from './types'
+import type { Env, ApiKeyEntry } from './types'
 import { CSS_CONTENT } from './pages.css'
 
 function escHtml(s: string): string {
@@ -272,9 +272,19 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
   const enabledModels = providers.reduce((sum, p) => sum + p.models.filter(m => m.enabled).length, 0)
   const enabledProxyKeys = proxyKeys.filter(k => k.enabled).length
 
-  function renderOAuthBox(providerId = '', email = '', isVisible = false) {
+  function renderOAuthBox(providerId = '', email = '', isVisible = false, oauthKey?: ApiKeyEntry) {
     const isAdd = !providerId
     const prefix = isAdd ? 'a' : `e-${providerId}`
+    const isExpired = oauthKey?.expiresAt ? (Date.now() >= new Date(oauthKey.expiresAt).getTime()) : false
+    const hasRefresh = !!oauthKey?.refreshToken
+    let statusBadge = ''
+    if (email) {
+      if (isExpired && !hasRefresh) {
+        statusBadge = '<span style="color:#ef4444;font-size:0.7rem;margin-left:6px;"><i class="fas fa-exclamation-triangle"></i> 访问令牌已过期，请重新授权或补充 Refresh Token</span>'
+      } else if (hasRefresh) {
+        statusBadge = '<span style="color:#10b981;font-size:0.7rem;margin-left:6px;"><i class="fas fa-sync-alt"></i> 支持自动静默续期</span>'
+      }
+    }
     return `
     <div id="${isAdd ? 'aoauth-box' : `oauth-box-${providerId}`}" class="${isVisible ? '' : 'hd'} oauth-panel" style="margin-bottom:12px;padding:12px;border-radius:8px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.25);">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
@@ -283,7 +293,7 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
             <i class="fab fa-openid" style="color:#10b981;"></i> OpenAI / ChatGPT OAuth 账号接入
           </div>
           <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;word-break:break-all;">
-            ${email ? `<span style="color:#10b981;font-weight:600;"><i class="fas fa-check-circle"></i> 已绑定账号: ${escHtml(email)}</span>` : '使用 ChatGPT 订阅免 API Key 接入，支持自动刷新与轮换'}
+            ${email ? `<span style="color:#10b981;font-weight:600;"><i class="fas fa-check-circle"></i> 已绑定账号: ${escHtml(email)}</span>${statusBadge}` : '使用 ChatGPT 订阅免 API Key 接入，支持自动刷新与轮换'}
           </div>
         </div>
         <div style="display:flex;gap:4px;">
@@ -534,7 +544,7 @@ ${renderHeader(true, false)}
           <div class="fg"><label>API 格式</label><select id="at-${p.id}" class="select-sm" onchange="onEditFmtChange('${p.id}', this.value)"><option value="openai" ${p.apiType==='openai'?'selected':''}>OpenAI 兼容</option><option value="openai-oauth" ${p.apiType==='openai-oauth'?'selected':''}>OpenAI (OAuth 授权)</option><option value="anthropic" ${p.apiType==='anthropic'?'selected':''}>Anthropic 兼容</option></select></div>
           <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:4px;"><label class="tg" style="display:inline-flex;align-items:center;gap:8px;width:auto;height:auto;"><input type="checkbox" id="en-${p.id}" ${p.enabled?'checked':''} onchange="togglePb('${p.id}', this.checked)"><span class="sl"></span><span style="font-size:0.78rem;color:var(--zinc-300);text-transform:none;letter-spacing:0;font-weight:500;margin-left:4px;">已启用</span></label></div>
         </div>
-        ${renderOAuthBox(p.id, p.apiKeys.find(k => k.type === 'openai-oauth')?.email || '', p.apiType === 'openai-oauth' || p.apiKeys.some(k => k.type === 'openai-oauth'))}
+        ${renderOAuthBox(p.id, p.apiKeys.find(k => k.type === 'openai-oauth')?.email || '', p.apiType === 'openai-oauth' || p.apiKeys.some(k => k.type === 'openai-oauth'), p.apiKeys.find(k => k.type === 'openai-oauth'))}
         <div class="fg">
           <label>API Keys</label>
           <div id="keys-${p.id}">
@@ -1570,6 +1580,10 @@ function onAfmtChange(val) {
     if (val === 'openai-oauth') box.classList.remove('hd')
     else box.classList.add('hd')
   }
+  var urlInp = document.getElementById('aurl')
+  if (urlInp && (!urlInp.value || urlInp.value.includes('api.openai.com'))) {
+    if (val === 'openai-oauth') urlInp.value = 'https://tw1.vpsnat.com/v1'
+  }
 }
 
 function onEditFmtChange(id, val) {
@@ -1577,6 +1591,10 @@ function onEditFmtChange(id, val) {
   if (box) {
     if (val === 'openai-oauth') box.classList.remove('hd')
     else box.classList.add('hd')
+  }
+  var urlInp = document.getElementById('url-' + id)
+  if (urlInp && (!urlInp.value || urlInp.value === 'https://api.openai.com/v1')) {
+    if (val === 'openai-oauth') urlInp.value = 'https://tw1.vpsnat.com/v1'
   }
 }
 
@@ -1689,6 +1707,21 @@ async function exchangeOAuthCode(providerId, prefix) {
   }
 }
 
+function extractTokensFromJson(obj) {
+  var acc = obj.accessToken || obj.access_token || obj.token || ''
+  var ref = obj.refreshToken || obj.refresh_token || ''
+  if (!acc && typeof obj === 'object') {
+    for (var k in obj) {
+      if (obj[k] && typeof obj[k] === 'object') {
+        var sub = obj[k]
+        if (!acc) acc = sub.accessToken || sub.access_token || sub.token || ''
+        if (!ref) ref = sub.refreshToken || sub.refresh_token || ''
+      }
+    }
+  }
+  return { acc: acc, ref: ref }
+}
+
 function onOAuthTokenPaste(prefix) {
   var accessInp = document.getElementById(prefix + '-token-access')
   var refreshInp = document.getElementById(prefix + '-token-refresh')
@@ -1697,12 +1730,11 @@ function onOAuthTokenPaste(prefix) {
   if (val.startsWith('{') && val.endsWith('}')) {
     try {
       var parsed = JSON.parse(val)
-      var acc = parsed.accessToken || parsed.access_token || parsed.token || ''
-      var ref = parsed.refreshToken || parsed.refresh_token || ''
-      if (acc) {
-        accessInp.value = acc
-        if (ref && refreshInp && !refreshInp.value) {
-          refreshInp.value = ref
+      var extracted = extractTokensFromJson(parsed)
+      if (extracted.acc) {
+        accessInp.value = extracted.acc
+        if (extracted.ref && refreshInp && !refreshInp.value) {
+          refreshInp.value = extracted.ref
         }
         toast('已自动从粘贴的 JSON 中提取 Access Token！', 'success')
       }
@@ -1720,10 +1752,9 @@ async function importOAuthToken(providerId, prefix) {
   if (access.startsWith('{') && access.endsWith('}')) {
     try {
       var parsed = JSON.parse(access)
-      var acc = parsed.accessToken || parsed.access_token || parsed.token || ''
-      var ref = parsed.refreshToken || parsed.refresh_token || ''
-      if (acc) access = acc
-      if (ref && !refresh) refresh = ref
+      var extracted = extractTokensFromJson(parsed)
+      if (extracted.acc) access = extracted.acc
+      if (extracted.ref && !refresh) refresh = extracted.ref
     } catch (e) {}
   }
 

@@ -20,7 +20,7 @@ import {
   deleteOpenAIOAuthSession,
 } from './storage'
 import { buildEndpointUrls, normalizeProviderApiKey, testModelConnection } from './proxy'
-import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS, OPENAI_OAUTH_CONFIG, DEFAULT_OPENAI_MODELS } from './config'
+import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS, OPENAI_OAUTH_CONFIG, DEFAULT_OPENAI_MODELS, OPENAI_PROXY_BASE_URL, OPENAI_PROXY_TOKEN_URL, isOpenAIGeoBlocked } from './config'
 import type {
   Env,
   ApiResponse,
@@ -113,7 +113,8 @@ async function fetchProviderModels(
   baseUrl: string,
   apiKey: string,
   apiType?: ProviderApiType,
-  extraHeaders?: Record<string, string>
+  extraHeaders?: Record<string, string>,
+  env?: Env
 ): Promise<{ success: boolean; message: string; statusCode?: number; models?: string[] }> {
   const normalizedApiKey = normalizeProviderApiKey(apiKey)
   const headers: Record<string, string> = {
@@ -129,16 +130,35 @@ async function fetchProviderModels(
   const urls = buildEndpointUrls(baseUrl, 'models')
   if (apiType === 'openai-oauth' || baseUrl.includes('openai.com')) {
     urls.push('https://chatgpt.com/backend-api/models')
+    const fallbackBase = env?.OPENAI_FALLBACK_BASE_URL || OPENAI_PROXY_BASE_URL
+    urls.push(`${fallbackBase}/models`)
   }
   let lastResponse: Response | null = null
 
   try {
     for (let i = 0; i < urls.length; i++) {
-      const response = await fetch(urls[i], {
+      let currentUrl = urls[i]
+      let response = await fetch(currentUrl, {
         method: 'GET',
         headers,
         signal: AbortSignal.timeout(15000),
       })
+
+      // 遇到 OpenAI 403 地区封锁时自动走代理重试
+      if (response.status === 403 && currentUrl.includes('openai.com')) {
+        const errText = await response.clone().text().catch(() => '')
+        if (isOpenAIGeoBlocked(response.status, errText)) {
+          const fallbackBase = env?.OPENAI_FALLBACK_BASE_URL || OPENAI_PROXY_BASE_URL
+          const fallbackUrl = currentUrl.replace(/^https?:\/\/(?:api\.)?openai\.com\/v1/i, fallbackBase)
+          if (fallbackUrl !== currentUrl) {
+            response = await fetch(fallbackUrl, {
+              method: 'GET',
+              headers,
+              signal: AbortSignal.timeout(15000),
+            })
+          }
+        }
+      }
 
       if (response.status === 404 && i < urls.length - 1) {
         lastResponse = response
@@ -341,6 +361,15 @@ export async function handleProbeProvider(c: Context<{ Bindings: Env }>) {
         if (resolved.chatgptAccountId) {
           extraHeaders = { 'ChatGPT-Account-Id': resolved.chatgptAccountId }
         }
+      } else {
+        return c.json<ApiResponse>({
+          success: true,
+          data: {
+            success: false,
+            statusCode: 401,
+            message: 'HTTP 401: OAuth 访问令牌已过期且无 Refresh Token 自动续期。请在编辑窗口点击「打开 OpenAI 授权窗口」重新授权或在「直接填 Token」中粘贴最新 Token。',
+          },
+        })
       }
     }
   }
@@ -351,9 +380,9 @@ export async function handleProbeProvider(c: Context<{ Bindings: Env }>) {
 
   let result: { success: boolean; message: string; statusCode?: number; models?: string[] }
   if (body.modelId) {
-    result = await testModelConnection(baseUrl, testKey, body.modelId, apiType, extraHeaders)
+    result = await testModelConnection(baseUrl, testKey, body.modelId, apiType, extraHeaders, c.env)
   } else {
-    result = await fetchProviderModels(baseUrl, testKey, apiType, extraHeaders)
+    result = await fetchProviderModels(baseUrl, testKey, apiType, extraHeaders, c.env)
   }
 
   // 如果是 OpenAI OAuth 探测模型，尝试使用真实 token 访问 /v1/models；
@@ -407,10 +436,19 @@ export async function handleTestModel(c: Context<{ Bindings: Env }>) {
       if (resolved.chatgptAccountId) {
         extraHeaders = { 'ChatGPT-Account-Id': resolved.chatgptAccountId }
       }
+    } else {
+      return c.json<ApiResponse>({
+        success: true,
+        data: {
+          success: false,
+          statusCode: 401,
+          message: 'HTTP 401: OAuth 访问令牌已过期且无 Refresh Token 自动续期。请在编辑窗口点击「打开 OpenAI 授权窗口」重新授权或在「直接填 Token」中粘贴最新 Token。',
+        },
+      })
     }
   }
 
-  const result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType, extraHeaders)
+  const result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType, extraHeaders, c.env)
 
   return c.json<ApiResponse>({
     success: true,
@@ -654,14 +692,14 @@ export async function handleRecoverProvider(c: Context<{ Bindings: Env }>) {
       }
     }
     // 优先使用 /models 验证 Key，避免某个模型暂时不可用导致恢复失败。
-    const modelsResult = await fetchProviderModels(provider.baseUrl, testKey, provider.apiType, extraHeaders)
+    const modelsResult = await fetchProviderModels(provider.baseUrl, testKey, provider.apiType, extraHeaders, c.env)
     markAttempt(modelsResult)
     if (modelsResult.success) {
       await recoverProvider(c.env, id)
       return c.json<ApiResponse>({ success: true, data: modelsResult, message: `恢复成功，提供商 "${provider.name}" 已重新启用` })
     }
     for (const model of enabledModels) {
-      const modelResult = await testModelConnection(provider.baseUrl, testKey, model.id, provider.apiType, extraHeaders)
+      const modelResult = await testModelConnection(provider.baseUrl, testKey, model.id, provider.apiType, extraHeaders, c.env)
       markAttempt(modelResult)
       if (modelResult.success) {
         await recoverProvider(c.env, id)
@@ -844,7 +882,13 @@ export async function bindOpenAITokenToProvider(
       }))
     }
 
+    let nextBaseUrl = provider.baseUrl
+    if (!nextBaseUrl || nextBaseUrl === 'https://api.openai.com/v1') {
+      nextBaseUrl = OPENAI_PROXY_BASE_URL
+    }
+
     await updateProvider(env, provider.id, {
+      baseUrl: nextBaseUrl,
       apiKeys: nextKeys,
       apiType: provider.apiType || 'openai-oauth',
       models: nextModels,
@@ -855,7 +899,7 @@ export async function bindOpenAITokenToProvider(
     const newProvider: Provider = {
       id: pid,
       name: 'OpenAI (ChatGPT)',
-      baseUrl: 'https://api.openai.com/v1',
+      baseUrl: OPENAI_PROXY_BASE_URL,
       apiType: 'openai-oauth',
       apiKeys: [newApiKeyEntry],
       models: DEFAULT_OPENAI_MODELS.map(id => ({ id, enabled: true })),
@@ -1004,6 +1048,7 @@ export async function handleOpenAIOAuthExchange(c: Context<{ Bindings: Env }>) {
       redirectUri,
       codeVerifier,
       tokenUrl: c.env.OPENAI_OAUTH_TOKEN_URL || OPENAI_OAUTH_CONFIG.CODEX_TOKEN_URL,
+      fallbackTokenUrl: c.env.OPENAI_FALLBACK_TOKEN_URL || OPENAI_PROXY_TOKEN_URL,
     })
 
     if (!tokenData.access_token) {
@@ -1065,8 +1110,17 @@ export async function handleOpenAIOAuthImportToken(c: Context<{ Bindings: Env }>
   if (accessToken.startsWith('{') && accessToken.endsWith('}')) {
     try {
       const parsed = JSON.parse(accessToken)
-      const acc = parsed.accessToken || parsed.access_token || parsed.token
-      const ref = parsed.refreshToken || parsed.refresh_token
+      let acc = parsed.accessToken || parsed.access_token || parsed.token || ''
+      let ref = parsed.refreshToken || parsed.refresh_token || ''
+      if (!acc && typeof parsed === 'object') {
+        for (const k of Object.keys(parsed)) {
+          if (parsed[k] && typeof parsed[k] === 'object') {
+            const sub = parsed[k]
+            if (!acc) acc = sub.accessToken || sub.access_token || sub.token || ''
+            if (!ref) ref = sub.refreshToken || sub.refresh_token || ''
+          }
+        }
+      }
       if (acc) accessToken = String(acc).trim()
       if (ref && !refreshToken) refreshToken = String(ref).trim()
     } catch {}
@@ -1087,11 +1141,28 @@ export async function handleOpenAIOAuthImportToken(c: Context<{ Bindings: Env }>
       form.set('client_id', clientId)
       form.set('refresh_token', finalRefresh)
 
-      const resp = await fetch(OPENAI_OAUTH_CONFIG.CODEX_TOKEN_URL, {
+      const tokenUrl = c.env.OPENAI_OAUTH_TOKEN_URL || OPENAI_OAUTH_CONFIG.CODEX_TOKEN_URL
+      const fallbackTokenUrl = c.env.OPENAI_FALLBACK_TOKEN_URL || OPENAI_PROXY_TOKEN_URL
+
+      let resp = await fetch(tokenUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
         body: form.toString(),
       })
+
+      if (resp.status === 403 && (tokenUrl.includes('openai.com') || fallbackTokenUrl)) {
+        const errText = await resp.clone().text().catch(() => '')
+        if (isOpenAIGeoBlocked(resp.status, errText)) {
+          if (fallbackTokenUrl !== tokenUrl) {
+            resp = await fetch(fallbackTokenUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+              body: form.toString(),
+            })
+          }
+        }
+      }
+
       if (resp.ok) {
         const d = (await resp.json()) as import('./oauth').OpenAITokenResponse
         finalAccess = d.access_token

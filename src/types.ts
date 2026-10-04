@@ -140,4 +140,6 @@ export interface Env {
   OPENAI_OAUTH_CLIENT_ID?: string
   OPENAI_OAUTH_CLIENT_SECRET?: string
   OPENAI_OAUTH_TOKEN_URL?: string
+  OPENAI_FALLBACK_BASE_URL?: string
+  OPENAI_FALLBACK_TOKEN_URL?: string
 }

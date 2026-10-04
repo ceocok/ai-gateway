@@ -1,8 +1,10 @@
 import { Context } from 'hono'
 import { getProvider, getProviders, autoPauseProvider, disableProviderKey, recordCallEnd, recordCallStart } from './storage'
-import { KV_KEYS, KEY_HEALTH_COOLDOWN_MS } from './config'
+import { KV_KEYS, KEY_HEALTH_COOLDOWN_MS, OPENAI_PROXY_BASE_URL, isOpenAIGeoBlocked } from './config'
 import type { CallStatusRecord, Env, Provider, ProviderApiType, ProxyRequestBody } from './types'
 import { refreshOpenAIToken, resolveProviderKeyToken } from './oauth'
+
+export { isOpenAIGeoBlocked }
 
 // ===== Key 健康状态类型和辅助函数 =====
 
@@ -158,7 +160,8 @@ export async function testModelConnection(
   apiKey: string,
   modelId: string,
   apiType?: ProviderApiType,
-  extraHeaders?: Record<string, string>
+  extraHeaders?: Record<string, string>,
+  env?: Env
 ): Promise<{ success: boolean; message: string; statusCode?: number }> {
   const normalizedApiKey = normalizeProviderApiKey(apiKey)
   try {
@@ -189,12 +192,31 @@ export async function testModelConnection(
     }
 
     for (let i = 0; i < urls.length; i++) {
-      const response = await fetch(urls[i], {
+      let currentUrl = urls[i]
+      let response = await fetch(currentUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(testPayload),
         signal: AbortSignal.timeout(15000),
       })
+
+      // 遇到 OpenAI 403 地区封锁时，自动走台湾反向代理重试
+      if (response.status === 403 && (currentUrl.includes('openai.com') || baseUrl.includes('openai.com'))) {
+        const errText = await response.clone().text().catch(() => '')
+        if (isOpenAIGeoBlocked(response.status, errText)) {
+          const fallbackBase = env?.OPENAI_FALLBACK_BASE_URL || OPENAI_PROXY_BASE_URL
+          const fallbackUrl = currentUrl.replace(/^https?:\/\/(?:api\.)?openai\.com\/v1/i, fallbackBase)
+          if (fallbackUrl !== currentUrl) {
+            const retryResp = await fetch(fallbackUrl, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(testPayload),
+              signal: AbortSignal.timeout(15000),
+            })
+            response = retryResp
+          }
+        }
+      }
 
       if (response.status === 404 && i < urls.length - 1) {
         lastResponse = response
@@ -219,9 +241,16 @@ export async function testModelConnection(
       errorBody = await response?.text() || '无响应'
     }
 
+    let friendlyMessage = `HTTP ${response?.status || 0}: ${errorBody.substring(0, 200)}`
+    if (response?.status === 401 && /token is expired|expired/i.test(errorBody)) {
+      friendlyMessage = 'HTTP 401: OpenAI 访问令牌已过期。请在编辑窗口点击「打开 OpenAI 授权窗口」重新授权或在「直接填 Token」中粘贴最新 Token（建议包含 refresh_token 以实现自动静默续期）。'
+    } else if (response?.status === 403 && isOpenAIGeoBlocked(403, errorBody)) {
+      friendlyMessage = 'HTTP 403: 上游提示地区受限。建议将提供商 API 地址设置为台湾反向代理（https://tw1.vpsnat.com/v1）。'
+    }
+
     return {
       success: false,
-      message: `HTTP ${response?.status || 0}: ${errorBody.substring(0, 200)}`,
+      message: friendlyMessage,
       statusCode: response?.status,
     }
   } catch (err) {
@@ -392,12 +421,30 @@ async function tryProvider(
 
       let response: Response | null = null
       for (let i = 0; i < forwardUrls.length; i++) {
-        const current = await fetch(forwardUrls[i], {
+        let reqUrl = forwardUrls[i]
+        let current = await fetch(reqUrl, {
           method: c.req.method,
           headers: forwardHeaders,
           body: JSON.stringify(forwardBody),
           signal: AbortSignal.timeout(60000),
         })
+
+        // 遭遇 OpenAI 区域限制时自动走代理重试
+        if (current.status === 403 && (reqUrl.includes('openai.com') || provider.baseUrl.includes('openai.com'))) {
+          const errText = await current.clone().text().catch(() => '')
+          if (isOpenAIGeoBlocked(current.status, errText)) {
+            const fallbackBase = c.env.OPENAI_FALLBACK_BASE_URL || OPENAI_PROXY_BASE_URL
+            const fallbackUrl = reqUrl.replace(/^https?:\/\/(?:api\.)?openai\.com\/v1/i, fallbackBase)
+            if (fallbackUrl !== reqUrl) {
+              current = await fetch(fallbackUrl, {
+                method: c.req.method,
+                headers: forwardHeaders,
+                body: JSON.stringify(forwardBody),
+                signal: AbortSignal.timeout(60000),
+              })
+            }
+          }
+        }
 
         if (current.status === 404 && i < forwardUrls.length - 1) {
           response = current
@@ -424,12 +471,28 @@ async function tryProvider(
               forwardHeaders['ChatGPT-Account-Id'] = resolvedNew.chatgptAccountId
             }
             for (let i = 0; i < forwardUrls.length; i++) {
-              const retryCurrent = await fetch(forwardUrls[i], {
+              let retryUrl = forwardUrls[i]
+              let retryCurrent = await fetch(retryUrl, {
                 method: c.req.method,
                 headers: forwardHeaders,
                 body: JSON.stringify(forwardBody),
                 signal: AbortSignal.timeout(60000),
               })
+              if (retryCurrent.status === 403 && (retryUrl.includes('openai.com') || provider.baseUrl.includes('openai.com'))) {
+                const errText = await retryCurrent.clone().text().catch(() => '')
+                if (isOpenAIGeoBlocked(retryCurrent.status, errText)) {
+                  const fallbackBase = c.env.OPENAI_FALLBACK_BASE_URL || OPENAI_PROXY_BASE_URL
+                  const fallbackUrl = retryUrl.replace(/^https?:\/\/(?:api\.)?openai\.com\/v1/i, fallbackBase)
+                  if (fallbackUrl !== retryUrl) {
+                    retryCurrent = await fetch(fallbackUrl, {
+                      method: c.req.method,
+                      headers: forwardHeaders,
+                      body: JSON.stringify(forwardBody),
+                      signal: AbortSignal.timeout(60000),
+                    })
+                  }
+                }
+              }
               if (retryCurrent.status === 404 && i < forwardUrls.length - 1) {
                 response = retryCurrent
                 continue

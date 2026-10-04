@@ -1,5 +1,5 @@
 import type { ApiKeyEntry, Env, Provider } from './types'
-import { OPENAI_OAUTH_CONFIG } from './config'
+import { OPENAI_OAUTH_CONFIG, OPENAI_PROXY_TOKEN_URL, isOpenAIGeoBlocked } from './config'
 import { getProvider, updateProviderOAuthKey } from './storage'
 
 // ===== Base64 URL 编解码 =====
@@ -197,6 +197,7 @@ export async function parseOAuthResponseError(response: Response, defaultPrefix 
 
 export async function exchangeOpenAICode(params: {
   tokenUrl?: string
+  fallbackTokenUrl?: string
   clientId: string
   clientSecret?: string
   code: string
@@ -214,7 +215,7 @@ export async function exchangeOpenAICode(params: {
     form.set('client_secret', params.clientSecret)
   }
 
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -222,6 +223,24 @@ export async function exchangeOpenAICode(params: {
     },
     body: form.toString(),
   })
+
+  // 如果遇到 403 地区限制且有备用代理 Token 端点，自动重试
+  if (response.status === 403 && (url.includes('openai.com') || params.fallbackTokenUrl)) {
+    const errText = await response.clone().text().catch(() => '')
+    if (isOpenAIGeoBlocked(response.status, errText)) {
+      const fallbackUrl = params.fallbackTokenUrl || OPENAI_PROXY_TOKEN_URL
+      if (fallbackUrl !== url) {
+        response = await fetch(fallbackUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          body: form.toString(),
+        })
+      }
+    }
+  }
 
   if (!response.ok) {
     const errMsg = await parseOAuthResponseError(response, '令牌交换失败')
@@ -248,7 +267,8 @@ export async function refreshOpenAIToken(
   }
 
   const clientId = keyEntry.clientId || env.OPENAI_OAUTH_CLIENT_ID || OPENAI_OAUTH_CONFIG.CODEX_CLIENT_ID
-  const tokenUrl = OPENAI_OAUTH_CONFIG.TOKEN_URL
+  const tokenUrl = env.OPENAI_OAUTH_TOKEN_URL || OPENAI_OAUTH_CONFIG.TOKEN_URL
+  const fallbackTokenUrl = env.OPENAI_FALLBACK_TOKEN_URL || OPENAI_PROXY_TOKEN_URL
 
   try {
     const form = new URLSearchParams()
@@ -256,7 +276,7 @@ export async function refreshOpenAIToken(
     form.set('client_id', clientId)
     form.set('refresh_token', rawRefreshToken)
 
-    const response = await fetch(tokenUrl, {
+    let response = await fetch(tokenUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -264,6 +284,22 @@ export async function refreshOpenAIToken(
       },
       body: form.toString(),
     })
+
+    if (response.status === 403 && (tokenUrl.includes('openai.com') || fallbackTokenUrl)) {
+      const errText = await response.clone().text().catch(() => '')
+      if (isOpenAIGeoBlocked(response.status, errText)) {
+        if (fallbackTokenUrl !== tokenUrl) {
+          response = await fetch(fallbackTokenUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              Accept: 'application/json',
+            },
+            body: form.toString(),
+          })
+        }
+      }
+    }
 
     if (!response.ok) {
       const errMsg = await parseOAuthResponseError(response, '刷新令牌失败')
