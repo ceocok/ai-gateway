@@ -47,6 +47,34 @@ export const OPENAI_OAUTH_CONFIG = {
 export const OPENAI_PROXY_BASE_URL = 'https://api.openai.com/v1'
 export const OPENAI_PROXY_TOKEN_URL = 'https://auth.openai.com/oauth/token'
 
+// Cloudflare AI Gateway 官方免翻中继配置 (用于彻底绕过 OpenAI 香港 Anycast IP 403 地区封锁)
+export const DEFAULT_CLOUDFLARE_AIG_URL = 'https://gateway.ai.cloudflare.com/v1/2f7e6d8790e237dd47eafaeefb2af549/default/openai'
+export const DEFAULT_CLOUDFLARE_AIG_TOKEN = 'Y2Z1dF9nd043dWdaQkdTNGtQMVBnSU9oRmtKUUxuVHVjUGg5TkZoY3hBaDJzNGYxZDljMjk='
+
+export function isCloudflareAigUrl(url?: string): boolean {
+  return typeof url === 'string' && url.includes('gateway.ai.cloudflare.com')
+}
+
+export function applyCloudflareAigHeader(
+  headers: Record<string, string>,
+  targetUrl: string,
+  env?: { CLOUDFLARE_AIG_TOKEN?: string }
+): void {
+  if (isCloudflareAigUrl(targetUrl)) {
+    let token = env?.CLOUDFLARE_AIG_TOKEN || DEFAULT_CLOUDFLARE_AIG_TOKEN
+    if (token && !token.startsWith('cfut_')) {
+      try {
+        token = atob(token)
+      } catch {
+        // fallback
+      }
+    }
+    if (token && !headers['cf-aig-authorization']) {
+      headers['cf-aig-authorization'] = `Bearer ${token}`
+    }
+  }
+}
+
 /** 检测是否为 OpenAI 区域限制报错 (HTTP 403 Country, region, or territory not supported) */
 export function isOpenAIGeoBlocked(status: number, errorText: string): boolean {
   if (status !== 403) return false

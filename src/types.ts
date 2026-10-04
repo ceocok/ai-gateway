@@ -142,4 +142,5 @@ export interface Env {
   OPENAI_OAUTH_TOKEN_URL?: string
   OPENAI_FALLBACK_BASE_URL?: string
   OPENAI_FALLBACK_TOKEN_URL?: string
+  CLOUDFLARE_AIG_TOKEN?: string
 }

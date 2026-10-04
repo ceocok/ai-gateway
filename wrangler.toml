@@ -12,7 +12,6 @@ region = "aws:us-east-1"
 [[kv_namespaces]]
 binding = "KV"
 
-# Admin credentials (set these in Cloudflare Dashboard > Workers > Variables)
-# [vars]
-# ADMIN_USERNAME = "admin"
-# ADMIN_PASSWORD = "your-secure-password"
+# Variables
+[vars]
+OPENAI_FALLBACK_BASE_URL = "https://gateway.ai.cloudflare.com/v1/2f7e6d8790e237dd47eafaeefb2af549/default/openai"

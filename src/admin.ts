@@ -21,7 +21,17 @@ import {
   deleteOpenAIOAuthSession,
 } from './storage'
 import { buildEndpointUrls, normalizeProviderApiKey, testModelConnection } from './proxy'
-import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS, OPENAI_OAUTH_CONFIG, DEFAULT_OPENAI_MODELS, OPENAI_PROXY_BASE_URL, OPENAI_PROXY_TOKEN_URL, isOpenAIGeoBlocked } from './config'
+import {
+  PROXY_KEY_PREFIX,
+  EXPIRY_OPTIONS,
+  OPENAI_OAUTH_CONFIG,
+  DEFAULT_OPENAI_MODELS,
+  OPENAI_PROXY_BASE_URL,
+  OPENAI_PROXY_TOKEN_URL,
+  DEFAULT_CLOUDFLARE_AIG_URL,
+  applyCloudflareAigHeader,
+  isOpenAIGeoBlocked,
+} from './config'
 import type {
   Env,
   ApiResponse,
@@ -128,11 +138,12 @@ async function fetchProviderModels(
   } else {
     headers['Authorization'] = `Bearer ${normalizedApiKey}`
   }
+  applyCloudflareAigHeader(headers, baseUrl, env)
 
   const urls = buildEndpointUrls(baseUrl, 'models')
   if (apiType === 'openai-oauth' || baseUrl.includes('openai.com')) {
     urls.push('https://chatgpt.com/backend-api/models')
-    const fallbackBase = env?.OPENAI_FALLBACK_BASE_URL || OPENAI_PROXY_BASE_URL
+    const fallbackBase = env?.OPENAI_FALLBACK_BASE_URL || DEFAULT_CLOUDFLARE_AIG_URL
     urls.push(`${fallbackBase}/models`)
   }
   let lastResponse: Response | null = null
@@ -140,22 +151,26 @@ async function fetchProviderModels(
   try {
     for (let i = 0; i < urls.length; i++) {
       let currentUrl = urls[i]
+      let currentHeaders = { ...headers }
+      applyCloudflareAigHeader(currentHeaders, currentUrl, env)
       let response = await fetch(currentUrl, {
         method: 'GET',
-        headers,
+        headers: currentHeaders,
         signal: AbortSignal.timeout(15000),
       })
 
-      // 遇到 OpenAI 403 地区封锁时自动走代理重试
+      // 遇到 OpenAI 403 地区封锁时自动走 Cloudflare AI Gateway / 免翻代理重试
       if (response.status === 403 && currentUrl.includes('openai.com')) {
         const errText = await response.clone().text().catch(() => '')
         if (isOpenAIGeoBlocked(response.status, errText)) {
-          const fallbackBase = env?.OPENAI_FALLBACK_BASE_URL || OPENAI_PROXY_BASE_URL
-          const fallbackUrl = currentUrl.replace(/^https?:\/\/(?:api\.)?openai\.com\/v1/i, fallbackBase)
+          const fallbackBase = env?.OPENAI_FALLBACK_BASE_URL || DEFAULT_CLOUDFLARE_AIG_URL
+          const fallbackUrl = currentUrl.replace(/^https?:\/\/(?:api\.)?openai\.com(?:\/v1)?/i, fallbackBase)
           if (fallbackUrl !== currentUrl) {
+            const retryHeaders = { ...headers }
+            applyCloudflareAigHeader(retryHeaders, fallbackUrl, env)
             response = await fetch(fallbackUrl, {
               method: 'GET',
-              headers,
+              headers: retryHeaders,
               signal: AbortSignal.timeout(15000),
             })
           }
