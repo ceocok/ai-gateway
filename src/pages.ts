@@ -282,7 +282,7 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
           <div style="font-size:0.84rem;font-weight:700;color:var(--zinc-100);display:flex;align-items:center;gap:6px;">
             <i class="fab fa-openid" style="color:#10b981;"></i> OpenAI / ChatGPT OAuth 账号接入
           </div>
-          <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;word-break:break-all;">
             ${email ? `<span style="color:#10b981;font-weight:600;"><i class="fas fa-check-circle"></i> 已绑定账号: ${escHtml(email)}</span>` : '使用 ChatGPT 订阅免 API Key 接入，支持自动刷新与轮换'}
           </div>
         </div>
@@ -304,9 +304,9 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
           </button>
           <span style="font-size:0.72rem;color:var(--text-muted);"><i class="fas fa-info-circle"></i> 授权后页面跳转至 http://localhost:1455/...（页面显示无法访问属正常）</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <input type="text" id="${prefix}-oauth-input" placeholder="2. 复制并粘贴地址栏完整链接 (http://localhost:1455/auth/callback?code=...) 或 code" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
-          <button type="button" class="btn btn-gh btn-xs" id="${prefix}-exchange-btn" onclick="exchangeOAuthCode('${providerId}','${prefix}')" style="white-space:nowrap;">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <input type="text" id="${prefix}-oauth-input" placeholder="2. 复制并粘贴地址栏完整链接 (http://localhost:1455/auth/callback?code=...) 或 code" class="fx1" style="font-size:0.75rem;min-height:30px;min-width:240px;font-family:monospace;">
+          <button type="button" class="btn btn-gh btn-xs" id="${prefix}-exchange-btn" onclick="exchangeOAuthCode('${providerId}','${prefix}')" style="white-space:nowrap;flex-shrink:0;">
             <i class="fas fa-check"></i> 兑换并绑定
           </button>
         </div>
@@ -534,9 +534,18 @@ ${renderHeader(true, false)}
           <label>API Keys</label>
           <div id="keys-${p.id}">
             ${p.apiKeys.map((k, ki) => `
-              <div data-kidx="${ki}" style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:rgba(9,9,11,0.4);border:1px solid rgba(63,63,70,0.3);margin-bottom:6px;">
-                <input type="text" value="${escHtml(k.key)}" class="fx1" id="k-${p.id}-${ki}" placeholder="API Key" style="font-family:'SF Mono','Fira Code','JetBrains Mono',monospace;font-size:0.78rem;" ${k.type === 'openai-oauth' ? 'readonly' : ''}>
-                ${k.type === 'openai-oauth' ? `<span style="font-size:0.72rem;color:#10b981;background:rgba(16,185,129,0.1);padding:2px 6px;border-radius:4px;white-space:nowrap;"><i class="fab fa-openid"></i> ${escHtml(k.email || 'OAuth')}</span>` : ''}
+              <div data-kidx="${ki}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;background:rgba(9,9,11,0.4);border:1px solid rgba(63,63,70,0.3);margin-bottom:6px;">
+                ${k.type === 'openai-oauth' ? `
+                  <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
+                    <span style="font-size:0.75rem;color:#10b981;background:rgba(16,185,129,0.12);padding:3px 8px;border-radius:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;">
+                      <i class="fab fa-openid"></i> ${escHtml(k.email || k.key)}
+                    </span>
+                    <span style="font-size:0.68rem;color:var(--text-muted);">(OAuth 账号)</span>
+                  </div>
+                  <input type="hidden" value="${escHtml(k.key)}" id="k-${p.id}-${ki}">
+                ` : `
+                  <input type="text" value="${escHtml(k.key)}" class="fx1" id="k-${p.id}-${ki}" placeholder="API Key" style="font-family:'SF Mono','Fira Code','JetBrains Mono',monospace;font-size:0.78rem;">
+                `}
                 <label class="tg"><input type="checkbox" ${k.enabled ? 'checked' : ''} id="ken-${p.id}-${ki}"><span class="sl"></span></label>
                 <button class="btn btn-gh btn-xs" onclick="testKeyRow('${p.id}',${ki})" title="测试"><i class="fas fa-plug"></i></button>
                 <button class="btn btn-gh btn-xs" onclick="rmKeyRow('${p.id}',${ki})"><i class="fas fa-times c-muted"></i></button>
@@ -689,7 +698,7 @@ function selectProvider(id) {
 
   const overlay = document.createElement('div')
   overlay.className = 'modal-o provider-editor-overlay'
-  overlay.innerHTML = '<div class="modal provider-editor-modal" role="dialog" aria-modal="true" aria-labelledby="provider-editor-title">' +
+  overlay.innerHTML = '<div class="provider-editor-modal" role="dialog" aria-modal="true" aria-labelledby="provider-editor-title">' +
     '<div class="provider-modal-top"><div><p class="detail-eyebrow">Provider Settings</p><h2 id="provider-editor-title">编辑提供商</h2></div><button class="btn btn-gh btn-xs provider-modal-close" onclick="closeProviderEditor()" aria-label="关闭编辑"><i class="fas fa-times"></i></button></div>' +
     '<div class="provider-editor-slot"></div></div>'
   overlay.addEventListener('click', function(event) {

@@ -1672,27 +1672,42 @@ footer a:hover {
 
 /* Provider details are moved into this modal when a card is selected. */
 .provider-editor-overlay {
-  align-items: flex-start;
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 24px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .provider-editor-modal {
-  width: min(1520px, 100%);
-  max-width: 1520px;
-  max-height: calc(100vh - 48px);
-  padding: 0;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  box-shadow: 0 25px 60px rgba(0,0,0,0.65);
+  width: min(840px, 95vw) !important;
+  max-width: 840px !important;
+  max-height: min(92vh, 900px);
+  padding: 0 !important;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: mi 0.15s ease;
 }
 
 .provider-modal-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 20px 20px 16px;
+  padding: 16px 22px;
   border-bottom: 1px solid rgba(63,63,70,0.35);
-  background: rgba(24,24,27,0.86);
+  background: rgba(24,24,27,0.92);
+  flex-shrink: 0;
 }
 
 .provider-modal-top h2 {
@@ -1702,7 +1717,8 @@ footer a:hover {
 }
 
 .provider-modal-top .detail-eyebrow {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+  font-size: 0.68rem;
 }
 
 .provider-modal-close {
@@ -1710,13 +1726,26 @@ footer a:hover {
   height: 30px;
   padding: 0;
   font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+.provider-editor-slot {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .provider-editor-modal .pd {
-  max-height: calc(100vh - 137px);
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   border: none;
   border-radius: 0;
+  padding: 22px;
+  background: transparent;
 }
 
 .pd .fr {
@@ -2246,13 +2275,20 @@ footer a:hover {
     grid-template-columns: 1fr;
   }
   .provider-editor-overlay {
-    padding: 12px;
+    padding: 10px;
   }
   .provider-editor-modal {
-    max-height: calc(100vh - 24px);
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: calc(100vh - 20px);
+    border-radius: 12px;
   }
   .provider-editor-modal .pd {
-    max-height: calc(100vh - 113px);
+    max-height: none;
+    padding: 14px 12px;
+  }
+  .provider-modal-top {
+    padding: 12px 14px;
   }
 }
 
