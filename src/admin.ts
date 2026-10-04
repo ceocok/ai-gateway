@@ -43,6 +43,7 @@ import {
   encryptSecret,
   decryptSecret,
   parseJwtPayload,
+  parseOAuthResponseError,
   resolveProviderKeyToken,
 } from './oauth'
 
@@ -881,27 +882,29 @@ export async function handleOpenAIOAuthExchange(c: Context<{ Bindings: Env }>) {
     clientSecret?: string
   })
 
-  const input = (body.codeOrUrl || '').trim()
-  if (!input) {
+  const rawInput = (body.codeOrUrl || '').trim()
+  if (!rawInput) {
     return c.json<ApiResponse>({ success: false, message: '请提供授权回调 URL 或 code 授权码' }, 400)
   }
 
+  // 清洗输入，去除首尾可能带入的引号、括号
+  const input = rawInput.replace(/^["'（(]+|["'）)]+$/g, '').trim()
   let code = input
   let state = body.state || ''
 
   // 从 URL 中解析 code 和 state
   if (input.includes('code=') || input.startsWith('http://') || input.startsWith('https://')) {
     try {
-      const parsed = new URL(input.startsWith('http') ? input : `http://localhost/${input}`)
+      const parsed = new URL(input.startsWith('http') ? input : `http://localhost/${input.replace(/^\/+/, '')}`)
       const cParam = parsed.searchParams.get('code')
       const sParam = parsed.searchParams.get('state')
       if (cParam) code = cParam
-      if (sParam && !state) state = sParam
+      if (sParam) state = sParam // 优先使用回调 URL 中携带的 state
     } catch {
-      const codeMatch = input.match(/code=([^&]+)/)
-      const stateMatch = input.match(/state=([^&]+)/)
+      const codeMatch = input.match(/[?&]code=([^&]+)/) || input.match(/code=([^&]+)/)
+      const stateMatch = input.match(/[?&]state=([^&]+)/) || input.match(/state=([^&]+)/)
       if (codeMatch) code = decodeURIComponent(codeMatch[1])
-      if (stateMatch && !state) state = decodeURIComponent(stateMatch[1])
+      if (stateMatch) state = decodeURIComponent(stateMatch[1])
     }
   }
 
@@ -927,7 +930,7 @@ export async function handleOpenAIOAuthExchange(c: Context<{ Bindings: Env }>) {
   if (!codeVerifier) {
     return c.json<ApiResponse>({
       success: false,
-      message: '未找到匹配的授权会话或会话已过期，请在后台点击「重新授权」后再次复制兑换',
+      message: '未找到匹配的授权会话或会话已过期，请在后台点击「1. 打开 OpenAI 授权窗口」重新授权后再复制兑换',
     }, 400)
   }
 
@@ -960,9 +963,12 @@ export async function handleOpenAIOAuthExchange(c: Context<{ Bindings: Env }>) {
       data: { email: res.email, providerId: res.providerId },
     })
   } catch (err: any) {
+    const errorMsg = (err && typeof err === 'object' && err.message)
+      ? String(err.message)
+      : (typeof err === 'string' ? err : '令牌兑换失败')
     return c.json<ApiResponse>({
       success: false,
-      message: err.message || '令牌兑换失败',
+      message: errorMsg,
     }, 400)
   }
 }
@@ -996,14 +1002,15 @@ export async function handleOpenAIOAuthImportToken(c: Context<{ Bindings: Env }>
 
   if (!finalAccess && finalRefresh) {
     try {
+      const form = new URLSearchParams()
+      form.set('grant_type', 'refresh_token')
+      form.set('client_id', clientId)
+      form.set('refresh_token', finalRefresh)
+
       const resp = await fetch(OPENAI_OAUTH_CONFIG.CODEX_TOKEN_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'refresh_token',
-          client_id: clientId,
-          refresh_token: finalRefresh,
-        }),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: form.toString(),
       })
       if (resp.ok) {
         const d = (await resp.json()) as import('./oauth').OpenAITokenResponse
@@ -1011,7 +1018,8 @@ export async function handleOpenAIOAuthImportToken(c: Context<{ Bindings: Env }>
         if (d.refresh_token) finalRefresh = d.refresh_token
         if (d.expires_in) expiresIn = d.expires_in
       } else {
-        return c.json<ApiResponse>({ success: false, message: '使用 Refresh Token 获取访问令牌失败，请检查 Token 有效性' }, 400)
+        const errMsg = await parseOAuthResponseError(resp, '刷新令牌失败')
+        return c.json<ApiResponse>({ success: false, message: `使用 Refresh Token 获取访问令牌失败: ${errMsg}` }, 400)
       }
     } catch (e: any) {
       return c.json<ApiResponse>({ success: false, message: e.message || '请求 OpenAI 令牌服务失败' }, 400)

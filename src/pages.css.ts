@@ -2107,7 +2107,7 @@ footer a:hover {
   position: fixed;
   top: 18px;
   right: 18px;
-  z-index: 9998;
+  z-index: 100000;
   min-width: 260px;
   max-width: 400px;
   animation: ti 0.2s ease;

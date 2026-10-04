@@ -165,8 +165,34 @@ export interface OpenAITokenResponse {
   token_type?: string
   id_token?: string
   chatgpt_account_id?: string
-  error?: string
+  error?: string | { message?: string; type?: string; code?: string; param?: any }
   error_description?: string
+  message?: string
+}
+
+export async function parseOAuthResponseError(response: Response, defaultPrefix = '令牌操作失败'): Promise<string> {
+  const status = response.status
+  try {
+    const raw = await response.text()
+    try {
+      const data = JSON.parse(raw)
+      if (typeof data.error === 'string') {
+        return data.error_description ? `${data.error}: ${data.error_description}` : data.error
+      }
+      if (data.error && typeof data.error === 'object') {
+        return data.error.message || data.error.code || JSON.stringify(data.error)
+      }
+      if (data.error_description) {
+        return data.error_description
+      }
+      if (data.message) {
+        return data.message
+      }
+    } catch {
+      if (raw && raw.length < 300) return raw
+    }
+  } catch {}
+  return `${defaultPrefix} (HTTP ${status})`
 }
 
 export async function exchangeOpenAICode(params: {
@@ -178,31 +204,31 @@ export async function exchangeOpenAICode(params: {
   codeVerifier: string
 }): Promise<OpenAITokenResponse> {
   const url = params.tokenUrl || OPENAI_OAUTH_CONFIG.TOKEN_URL
-  const body: Record<string, string> = {
-    grant_type: 'authorization_code',
-    client_id: params.clientId,
-    code: params.code,
-    redirect_uri: params.redirectUri,
-    code_verifier: params.codeVerifier,
-  }
+  const form = new URLSearchParams()
+  form.set('grant_type', 'authorization_code')
+  form.set('client_id', params.clientId)
+  form.set('code', params.code)
+  form.set('redirect_uri', params.redirectUri)
+  form.set('code_verifier', params.codeVerifier)
   if (params.clientSecret) {
-    body.client_secret = params.clientSecret
+    form.set('client_secret', params.clientSecret)
   }
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
       Accept: 'application/json',
     },
-    body: JSON.stringify(body),
+    body: form.toString(),
   })
 
-  const data = (await response.json().catch(() => ({}))) as OpenAITokenResponse
   if (!response.ok) {
-    throw new Error(data.error_description || data.error || `令牌交换失败 (HTTP ${response.status})`)
+    const errMsg = await parseOAuthResponseError(response, '令牌交换失败')
+    throw new Error(errMsg)
   }
-  return data
+
+  return (await response.json()) as OpenAITokenResponse
 }
 
 export async function refreshOpenAIToken(
@@ -225,21 +251,23 @@ export async function refreshOpenAIToken(
   const tokenUrl = OPENAI_OAUTH_CONFIG.TOKEN_URL
 
   try {
+    const form = new URLSearchParams()
+    form.set('grant_type', 'refresh_token')
+    form.set('client_id', clientId)
+    form.set('refresh_token', rawRefreshToken)
+
     const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
         Accept: 'application/json',
       },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        client_id: clientId,
-        refresh_token: rawRefreshToken,
-      }),
+      body: form.toString(),
     })
 
     if (!response.ok) {
-      console.error(`OpenAI OAuth 令牌刷新失败 (HTTP ${response.status})`)
+      const errMsg = await parseOAuthResponseError(response, '刷新令牌失败')
+      console.error(`OpenAI OAuth 令牌刷新失败: ${errMsg}`)
       return null
     }
 

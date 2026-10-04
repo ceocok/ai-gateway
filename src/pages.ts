@@ -299,14 +299,14 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
           使用 OpenAI 官方客户端通道。点击下方按钮登录同意后，将浏览器跳转页面的地址栏链接粘贴回下方输入框：
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-p btn-xs" onclick="startOpenAIOAuth('${providerId}','codex','${prefix}')">
+          <button type="button" class="btn btn-p btn-xs" id="${prefix}-start-btn" onclick="startOpenAIOAuth('${providerId}','codex','${prefix}')">
             <i class="fas fa-external-link-alt"></i> 1. 打开 OpenAI 授权窗口
           </button>
           <span style="font-size:0.72rem;color:var(--text-muted);"><i class="fas fa-info-circle"></i> 授权后页面跳转至 http://localhost:1455/...（页面显示无法访问属正常）</span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <input type="text" id="${prefix}-oauth-input" placeholder="2. 复制并粘贴地址栏完整链接 (http://localhost:1455/auth/callback?code=...) 或 code" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
-          <button type="button" class="btn btn-gh btn-xs" onclick="exchangeOAuthCode('${providerId}','${prefix}')" style="white-space:nowrap;">
+          <button type="button" class="btn btn-gh btn-xs" id="${prefix}-exchange-btn" onclick="exchangeOAuthCode('${providerId}','${prefix}')" style="white-space:nowrap;">
             <i class="fas fa-check"></i> 兑换并绑定
           </button>
         </div>
@@ -321,7 +321,7 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
           <input type="text" id="${prefix}-token-access" placeholder="Access Token (以 eyJ... 开头的 JWT)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
           <div style="display:flex;align-items:center;gap:6px;">
             <input type="text" id="${prefix}-token-refresh" placeholder="Refresh Token (可选，提供则可在过期时自动静默刷新)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
-            <button type="button" class="btn btn-p btn-xs" onclick="importOAuthToken('${providerId}','${prefix}')" style="white-space:nowrap;">
+            <button type="button" class="btn btn-p btn-xs" id="${prefix}-token-btn" onclick="importOAuthToken('${providerId}','${prefix}')" style="white-space:nowrap;">
               <i class="fas fa-save"></i> 保存并绑定
             </button>
           </div>
@@ -339,11 +339,14 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <input type="text" id="${prefix}-custom-client-id" placeholder="Client ID (例如 oaiapp_...)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
-          <button type="button" class="btn btn-p btn-xs" onclick="startOpenAIOAuth('${providerId}','custom','${prefix}')" style="white-space:nowrap;">
+          <button type="button" class="btn btn-p btn-xs" id="${prefix}-custom-btn" onclick="startOpenAIOAuth('${providerId}','custom','${prefix}')" style="white-space:nowrap;">
             <i class="fas fa-sign-in-alt"></i> 域名回调授权
           </button>
         </div>
       </div>
+
+      <!-- 实时状态与操作反馈 -->
+      <div id="${prefix}-oauth-msg" class="hd"></div>
     </div>`
   }
 
@@ -1458,6 +1461,20 @@ function copyText(t, el) {
 // ── OpenAI OAuth ──
 var lastOAuthSessionState = ''
 
+function showOAuthMsg(prefix, html, type) {
+  var el = document.getElementById(prefix + '-oauth-msg')
+  if (!el) return
+  if (!html) {
+    el.innerHTML = ''
+    el.classList.add('hd')
+    return
+  }
+  var cls = type === 'success' ? 'al-s' : (type === 'error' ? 'al-e' : 'al-i')
+  var icon = type === 'success' ? 'fa-check-circle' : (type === 'error' ? 'fa-exclamation-triangle' : 'fa-info-circle')
+  el.innerHTML = '<div class="al ' + cls + '" style="margin:8px 0 0 0;font-size:0.75rem;"><i class="fas ' + icon + '"></i> ' + html + '</div>'
+  el.classList.remove('hd')
+}
+
 function onAfmtChange(val) {
   var box = document.getElementById('aoauth-box')
   if (box) {
@@ -1496,6 +1513,7 @@ async function startOpenAIOAuth(providerId, mode, prefix) {
     var cidInp = document.getElementById(prefix + '-custom-client-id')
     if (cidInp) customClientId = cidInp.value.trim()
   }
+  showOAuthMsg(prefix, '正在创建授权请求，准备打开 OpenAI 登录窗口...', 'info')
   var url = '/admin/api/oauth/openai/start?mode=' + encodeURIComponent(mode) +
     (providerId ? '&providerId=' + encodeURIComponent(providerId) : '') +
     (customClientId ? '&clientId=' + encodeURIComponent(customClientId) : '')
@@ -1505,7 +1523,9 @@ async function startOpenAIOAuth(providerId, mode, prefix) {
     var d = await r.json()
     if (d.success && d.data && d.data.authUrl) {
       lastOAuthSessionState = d.data.state
+      try { sessionStorage.setItem('last_openai_state', d.data.state) } catch(e) {}
       window.open(d.data.authUrl, 'openai_oauth', 'width=620,height=750,menubar=no,toolbar=no')
+      showOAuthMsg(prefix, '已在新窗口打开 OpenAI 授权页。请登录同意后，将浏览器最终跳转后的地址栏完整 URL 粘贴至下方输入框并点击「兑换并绑定」。', 'info')
       if (mode === 'codex' && prefix) {
         var inp = document.getElementById(prefix + '-oauth-input')
         if (inp) {
@@ -1514,20 +1534,36 @@ async function startOpenAIOAuth(providerId, mode, prefix) {
         }
       }
     } else {
+      showOAuthMsg(prefix, d.message || '获取授权链接失败', 'error')
       toast(d.message || '获取授权链接失败', 'error')
     }
   } catch (e) {
+    showOAuthMsg(prefix, '网络请求失败，请检查网络连接', 'error')
     toast('网络请求失败', 'error')
   }
 }
 
 async function exchangeOAuthCode(providerId, prefix) {
   var inp = document.getElementById(prefix + '-oauth-input')
+  var btn = document.getElementById(prefix + '-exchange-btn')
   var val = inp ? inp.value.trim() : ''
   if (!val) {
+    showOAuthMsg(prefix, '请先在输入框中粘贴跳转后的地址栏完整链接或 code 授权码', 'error')
     toast('请先粘贴跳转后的地址栏链接或 code 授权码', 'error')
     if (inp) inp.focus()
     return
+  }
+
+  var originalBtnText = btn ? btn.innerHTML : ''
+  if (btn) {
+    btn.disabled = true
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 兑换中...'
+  }
+  showOAuthMsg(prefix, '正在向 OpenAI 请求验证并交换访问令牌，请稍候...', 'info')
+
+  var stateToSend = lastOAuthSessionState
+  if (!stateToSend) {
+    try { stateToSend = sessionStorage.getItem('last_openai_state') || '' } catch(e) {}
   }
 
   try {
@@ -1536,31 +1572,52 @@ async function exchangeOAuthCode(providerId, prefix) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         codeOrUrl: val,
-        state: lastOAuthSessionState,
+        state: stateToSend,
         providerId: providerId || 'openai'
       })
     })
     var d = await r.json()
     if (d.success) {
+      showOAuthMsg(prefix, (d.message || '授权绑定成功！') + ' 正在刷新界面...', 'success')
       toast(d.message || 'OpenAI 账号授权绑定成功！', 'success')
+      try { sessionStorage.removeItem('last_openai_state') } catch(e) {}
       setTimeout(function() { location.reload() }, 1500)
     } else {
+      showOAuthMsg(prefix, '兑换失败: ' + escHtml(d.message || '授权码无效或已过期，请重新点击「1. 打开 OpenAI 授权窗口」获取最新授权链接。'), 'error')
       toast(d.message || '兑换失败，请检查授权码或重试', 'error')
+      if (btn) {
+        btn.disabled = false
+        btn.innerHTML = originalBtnText || '<i class="fas fa-check"></i> 兑换并绑定'
+      }
     }
   } catch (e) {
+    showOAuthMsg(prefix, '网络请求异常，请检查网络连接', 'error')
     toast('网络请求失败', 'error')
+    if (btn) {
+      btn.disabled = false
+      btn.innerHTML = originalBtnText || '<i class="fas fa-check"></i> 兑换并绑定'
+    }
   }
 }
 
 async function importOAuthToken(providerId, prefix) {
   var accessInp = document.getElementById(prefix + '-token-access')
   var refreshInp = document.getElementById(prefix + '-token-refresh')
+  var btn = document.getElementById(prefix + '-token-btn')
   var access = accessInp ? accessInp.value.trim() : ''
   var refresh = refreshInp ? refreshInp.value.trim() : ''
   if (!access && !refresh) {
+    showOAuthMsg(prefix, '请至少填写 Access Token 或 Refresh Token', 'error')
     toast('请至少填写 Access Token 或 Refresh Token', 'error')
     return
   }
+
+  var originalBtnText = btn ? btn.innerHTML : ''
+  if (btn) {
+    btn.disabled = true
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 保存中...'
+  }
+  showOAuthMsg(prefix, '正在验证并保存令牌...', 'info')
 
   try {
     var r = await fetch('/admin/api/oauth/openai/import-token', {
@@ -1574,13 +1631,24 @@ async function importOAuthToken(providerId, prefix) {
     })
     var d = await r.json()
     if (d.success) {
+      showOAuthMsg(prefix, (d.message || '令牌保存成功！') + ' 正在刷新界面...', 'success')
       toast(d.message || '令牌保存成功！', 'success')
       setTimeout(function() { location.reload() }, 1500)
     } else {
+      showOAuthMsg(prefix, '保存失败: ' + escHtml(d.message || '未知错误'), 'error')
       toast(d.message || '保存失败', 'error')
+      if (btn) {
+        btn.disabled = false
+        btn.innerHTML = originalBtnText || '<i class="fas fa-save"></i> 保存并绑定'
+      }
     }
   } catch (e) {
+    showOAuthMsg(prefix, '网络请求异常', 'error')
     toast('网络请求失败', 'error')
+    if (btn) {
+      btn.disabled = false
+      btn.innerHTML = originalBtnText || '<i class="fas fa-save"></i> 保存并绑定'
+    }
   }
 }
 
