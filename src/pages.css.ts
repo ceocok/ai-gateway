@@ -1848,6 +1848,12 @@ footer a:hover {
   border: 1px dashed var(--zinc-700);
 }
 
+.oauth-tab-btn.active {
+  background: rgba(16, 185, 129, 0.2) !important;
+  color: #6ee7b7 !important;
+  border-color: rgba(16, 185, 129, 0.4) !important;
+}
+
 .mdl-list-panel {
   flex: 1;
   padding: 16px;

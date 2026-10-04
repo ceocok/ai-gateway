@@ -21,6 +21,8 @@ import {
   handleUpdateProxyKey,
   handleDeleteProxyKey,
   handleOpenAIOAuthStart,
+  handleOpenAIOAuthExchange,
+  handleOpenAIOAuthImportToken,
   handleOpenAIOAuthCallback,
 } from './admin'
 import { renderHomePage, renderLoginPage, renderAdminPage } from './pages'
@@ -87,6 +89,8 @@ app.patch('/admin/api/proxy-keys/:id', handleUpdateProxyKey)
 
 // OpenAI OAuth 授权
 app.get('/admin/api/oauth/openai/start', handleOpenAIOAuthStart)
+app.post('/admin/api/oauth/openai/exchange', handleOpenAIOAuthExchange)
+app.post('/admin/api/oauth/openai/import-token', handleOpenAIOAuthImportToken)
 app.get('/admin/oauth/openai/callback', handleOpenAIOAuthCallback)
 
 // ===== API 转发路由 =====

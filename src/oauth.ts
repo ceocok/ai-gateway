@@ -137,6 +137,7 @@ export function buildOpenAIAuthorizeUrl(params: {
   codeChallenge: string
   scope?: string
   authorizeUrl?: string
+  nonce?: string
 }): string {
   const base = params.authorizeUrl || OPENAI_OAUTH_CONFIG.AUTHORIZE_URL
   const url = new URL(base)
@@ -147,6 +148,13 @@ export function buildOpenAIAuthorizeUrl(params: {
   url.searchParams.set('state', params.state)
   url.searchParams.set('code_challenge', params.codeChallenge)
   url.searchParams.set('code_challenge_method', 'S256')
+  if (params.nonce) {
+    url.searchParams.set('nonce', params.nonce)
+  }
+  if (params.clientId === 'dynamic_agent_client') {
+    url.searchParams.set('agent_name_hint', 'AI Gateway')
+    url.searchParams.set('ext_agent_host_id', `urn:uuid:${crypto.randomUUID()}`)
+  }
   return url.toString()
 }
 
@@ -164,24 +172,30 @@ export interface OpenAITokenResponse {
 export async function exchangeOpenAICode(params: {
   tokenUrl?: string
   clientId: string
+  clientSecret?: string
   code: string
   redirectUri: string
   codeVerifier: string
 }): Promise<OpenAITokenResponse> {
   const url = params.tokenUrl || OPENAI_OAUTH_CONFIG.TOKEN_URL
+  const body: Record<string, string> = {
+    grant_type: 'authorization_code',
+    client_id: params.clientId,
+    code: params.code,
+    redirect_uri: params.redirectUri,
+    code_verifier: params.codeVerifier,
+  }
+  if (params.clientSecret) {
+    body.client_secret = params.clientSecret
+  }
+
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      client_id: params.clientId,
-      code: params.code,
-      redirect_uri: params.redirectUri,
-      code_verifier: params.codeVerifier,
-    }),
+    body: JSON.stringify(body),
   })
 
   const data = (await response.json().catch(() => ({}))) as OpenAITokenResponse
@@ -207,7 +221,7 @@ export async function refreshOpenAIToken(
     rawRefreshToken = keyEntry.refreshToken
   }
 
-  const clientId = keyEntry.clientId || env.OPENAI_OAUTH_CLIENT_ID || OPENAI_OAUTH_CONFIG.DEFAULT_CLIENT_ID
+  const clientId = keyEntry.clientId || env.OPENAI_OAUTH_CLIENT_ID || OPENAI_OAUTH_CONFIG.CODEX_CLIENT_ID
   const tokenUrl = OPENAI_OAUTH_CONFIG.TOKEN_URL
 
   try {

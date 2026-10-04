@@ -266,10 +266,86 @@ async function l() {
 export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
   const providers = await getProviders(c.env)
   const proxyKeys = await getProxyKeys(c.env)
+  const host = c.req.header('host') || 'api.maxbox.cc.cd'
   const enabledProviders = providers.filter(p => p.enabled).length
   const totalModels = providers.reduce((sum, p) => sum + p.models.length, 0)
   const enabledModels = providers.reduce((sum, p) => sum + p.models.filter(m => m.enabled).length, 0)
   const enabledProxyKeys = proxyKeys.filter(k => k.enabled).length
+
+  function renderOAuthBox(providerId = '', email = '', isVisible = false) {
+    const isAdd = !providerId
+    const prefix = isAdd ? 'a' : `e-${providerId}`
+    return `
+    <div id="${isAdd ? 'aoauth-box' : `oauth-box-${providerId}`}" class="${isVisible ? '' : 'hd'} oauth-panel" style="margin-bottom:12px;padding:12px;border-radius:8px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.25);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:0.84rem;font-weight:700;color:var(--zinc-100);display:flex;align-items:center;gap:6px;">
+            <i class="fab fa-openid" style="color:#10b981;"></i> OpenAI / ChatGPT OAuth 账号接入
+          </div>
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">
+            ${email ? `<span style="color:#10b981;font-weight:600;"><i class="fas fa-check-circle"></i> 已绑定账号: ${escHtml(email)}</span>` : '使用 ChatGPT 订阅免 API Key 接入，支持自动刷新与轮换'}
+          </div>
+        </div>
+        <div style="display:flex;gap:4px;">
+          <button type="button" class="btn btn-gh btn-xs oauth-tab-btn active" id="${prefix}-tab-codex" onclick="switchOAuthTab('${prefix}','codex')">ChatGPT 授权</button>
+          <button type="button" class="btn btn-gh btn-xs oauth-tab-btn" id="${prefix}-tab-token" onclick="switchOAuthTab('${prefix}','token')">直接填 Token</button>
+          <button type="button" class="btn btn-gh btn-xs oauth-tab-btn" id="${prefix}-tab-custom" onclick="switchOAuthTab('${prefix}','custom')">自有应用</button>
+        </div>
+      </div>
+
+      <!-- Tab 1: 官方公共客户端授权 (最常用，免自建应用) -->
+      <div id="${prefix}-pane-codex" class="oauth-tab-pane">
+        <div style="font-size:0.73rem;color:var(--text-muted);margin-bottom:8px;line-height:1.4;">
+          使用 OpenAI 官方客户端通道。点击下方按钮登录同意后，将浏览器跳转页面的地址栏链接粘贴回下方输入框：
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-p btn-xs" onclick="startOpenAIOAuth('${providerId}','codex','${prefix}')">
+            <i class="fas fa-external-link-alt"></i> 1. 打开 OpenAI 授权窗口
+          </button>
+          <span style="font-size:0.72rem;color:var(--text-muted);"><i class="fas fa-info-circle"></i> 授权后页面跳转至 http://localhost:1455/...（页面显示无法访问属正常）</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input type="text" id="${prefix}-oauth-input" placeholder="2. 复制并粘贴地址栏完整链接 (http://localhost:1455/auth/callback?code=...) 或 code" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
+          <button type="button" class="btn btn-gh btn-xs" onclick="exchangeOAuthCode('${providerId}','${prefix}')" style="white-space:nowrap;">
+            <i class="fas fa-check"></i> 兑换并绑定
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab 2: 直接导入 Token -->
+      <div id="${prefix}-pane-token" class="oauth-tab-pane hd">
+        <div style="font-size:0.73rem;color:var(--text-muted);margin-bottom:8px;">
+          已有 ChatGPT Access Token 或 Refresh Token，可直接粘贴保存：
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <input type="text" id="${prefix}-token-access" placeholder="Access Token (以 eyJ... 开头的 JWT)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input type="text" id="${prefix}-token-refresh" placeholder="Refresh Token (可选，提供则可在过期时自动静默刷新)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
+            <button type="button" class="btn btn-p btn-xs" onclick="importOAuthToken('${providerId}','${prefix}')" style="white-space:nowrap;">
+              <i class="fas fa-save"></i> 保存并绑定
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 3: 自建 OAuth 应用 (域名回调模式) -->
+      <div id="${prefix}-pane-custom" class="oauth-tab-pane hd">
+        <div style="font-size:0.73rem;color:var(--text-muted);margin-bottom:8px;line-height:1.4;">
+          如在 OpenAI Developer 申请了 OAuth 应用，请在 OpenAI 后台设置 Redirect URI：
+          <div style="margin-top:4px;display:flex;align-items:center;gap:6px;">
+            <code class="cd" style="font-size:0.72rem;">https://${host}/admin/oauth/openai/callback</code>
+            <i class="fas fa-copy cp" style="cursor:pointer;" onclick="copyText('https://${host}/admin/oauth/openai/callback',this)" title="复制回调地址"></i>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input type="text" id="${prefix}-custom-client-id" placeholder="Client ID (例如 oaiapp_...)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
+          <button type="button" class="btn btn-p btn-xs" onclick="startOpenAIOAuth('${providerId}','custom','${prefix}')" style="white-space:nowrap;">
+            <i class="fas fa-sign-in-alt"></i> 域名回调授权
+          </button>
+        </div>
+      </div>
+    </div>`
+  }
 
   return c.html(`<!DOCTYPE html><html lang="zh-CN">
 ${H('管理')}
@@ -343,15 +419,7 @@ ${renderHeader(true, false)}
           <option value="anthropic">Anthropic 兼容</option>
         </select>
       </div>
-      <div id="aoauth-box" class="hd" style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-          <div>
-            <div style="font-size:0.82rem;font-weight:600;color:var(--zinc-200);"><i class="fab fa-openid" style="color:#10b981;"></i> 通过 OpenAI 快速授权</div>
-            <div style="font-size:0.74rem;color:var(--text-muted);margin-top:2px;">点击授权直接登录 ChatGPT/OpenAI，自动绑定到新提供商</div>
-          </div>
-          <button type="button" class="btn btn-p btn-xs" onclick="startOpenAIOAuth()"><i class="fas fa-sign-in-alt"></i> 登录授权</button>
-        </div>
-      </div>
+      ${renderOAuthBox('')}
       <div class="fg">
         <label>API Keys</label>
         <div id="akeys">
@@ -445,17 +513,7 @@ ${renderHeader(true, false)}
           <div class="fg"><label>API 格式</label><select id="at-${p.id}" class="select-sm" onchange="onEditFmtChange('${p.id}', this.value)"><option value="openai" ${p.apiType==='openai'?'selected':''}>OpenAI 兼容</option><option value="openai-oauth" ${p.apiType==='openai-oauth'?'selected':''}>OpenAI (OAuth 授权)</option><option value="anthropic" ${p.apiType==='anthropic'?'selected':''}>Anthropic 兼容</option></select></div>
           <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:4px;"><label class="tg" style="display:inline-flex;align-items:center;gap:8px;width:auto;height:auto;"><input type="checkbox" id="en-${p.id}" ${p.enabled?'checked':''} onchange="togglePb('${p.id}', this.checked)"><span class="sl"></span><span style="font-size:0.78rem;color:var(--zinc-300);text-transform:none;letter-spacing:0;font-weight:500;margin-left:4px;">已启用</span></label></div>
         </div>
-        <div id="oauth-box-${p.id}" class="${p.apiType === 'openai-oauth' || p.apiKeys.some(k => k.type === 'openai-oauth') ? '' : 'hd'}" style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-            <div>
-              <div style="font-size:0.82rem;font-weight:600;color:var(--zinc-200);"><i class="fab fa-openid" style="color:#10b981;"></i> OpenAI OAuth 授权绑定</div>
-              <div style="font-size:0.74rem;color:var(--text-muted);margin-top:2px;">
-                ${p.apiKeys.find(k => k.type === 'openai-oauth')?.email ? `已绑定账号: <strong>${escHtml(p.apiKeys.find(k => k.type === 'openai-oauth')?.email || '')}</strong>` : '连接 ChatGPT / OpenAI 官方账号自动获取访问令牌与轮换'}
-              </div>
-            </div>
-            <button type="button" class="btn btn-p btn-xs" onclick="startOpenAIOAuth('${p.id}')"><i class="fas fa-sync-alt"></i> ${p.apiKeys.some(k => k.type === 'openai-oauth') ? '重新授权' : '立即授权'}</button>
-          </div>
-        </div>
+        ${renderOAuthBox(p.id, p.apiKeys.find(k => k.type === 'openai-oauth')?.email || '', p.apiType === 'openai-oauth' || p.apiKeys.some(k => k.type === 'openai-oauth'))}
         <div class="fg">
           <label>API Keys</label>
           <div id="keys-${p.id}">
@@ -1398,6 +1456,8 @@ function copyText(t, el) {
 }
 
 // ── OpenAI OAuth ──
+var lastOAuthSessionState = ''
+
 function onAfmtChange(val) {
   var box = document.getElementById('aoauth-box')
   if (box) {
@@ -1414,15 +1474,110 @@ function onEditFmtChange(id, val) {
   }
 }
 
-async function startOpenAIOAuth(providerId) {
-  var url = '/admin/api/oauth/openai/start' + (providerId ? '?providerId=' + encodeURIComponent(providerId) : '')
+function switchOAuthTab(prefix, tab) {
+  ['codex', 'token', 'custom'].forEach(function(t) {
+    var pane = document.getElementById(prefix + '-pane-' + t)
+    var btn = document.getElementById(prefix + '-tab-' + t)
+    if (pane) {
+      if (t === tab) pane.classList.remove('hd')
+      else pane.classList.add('hd')
+    }
+    if (btn) {
+      if (t === tab) btn.classList.add('active')
+      else btn.classList.remove('active')
+    }
+  })
+}
+
+async function startOpenAIOAuth(providerId, mode, prefix) {
+  mode = mode || 'codex'
+  var customClientId = ''
+  if (prefix) {
+    var cidInp = document.getElementById(prefix + '-custom-client-id')
+    if (cidInp) customClientId = cidInp.value.trim()
+  }
+  var url = '/admin/api/oauth/openai/start?mode=' + encodeURIComponent(mode) +
+    (providerId ? '&providerId=' + encodeURIComponent(providerId) : '') +
+    (customClientId ? '&clientId=' + encodeURIComponent(customClientId) : '')
+
   try {
     var r = await fetch(url)
     var d = await r.json()
     if (d.success && d.data && d.data.authUrl) {
+      lastOAuthSessionState = d.data.state
       window.open(d.data.authUrl, 'openai_oauth', 'width=620,height=750,menubar=no,toolbar=no')
+      if (mode === 'codex' && prefix) {
+        var inp = document.getElementById(prefix + '-oauth-input')
+        if (inp) {
+          inp.focus()
+          inp.style.borderColor = 'var(--primary)'
+        }
+      }
     } else {
       toast(d.message || '获取授权链接失败', 'error')
+    }
+  } catch (e) {
+    toast('网络请求失败', 'error')
+  }
+}
+
+async function exchangeOAuthCode(providerId, prefix) {
+  var inp = document.getElementById(prefix + '-oauth-input')
+  var val = inp ? inp.value.trim() : ''
+  if (!val) {
+    toast('请先粘贴跳转后的地址栏链接或 code 授权码', 'error')
+    if (inp) inp.focus()
+    return
+  }
+
+  try {
+    var r = await fetch('/admin/api/oauth/openai/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        codeOrUrl: val,
+        state: lastOAuthSessionState,
+        providerId: providerId || 'openai'
+      })
+    })
+    var d = await r.json()
+    if (d.success) {
+      toast(d.message || 'OpenAI 账号授权绑定成功！', 'success')
+      setTimeout(function() { location.reload() }, 1500)
+    } else {
+      toast(d.message || '兑换失败，请检查授权码或重试', 'error')
+    }
+  } catch (e) {
+    toast('网络请求失败', 'error')
+  }
+}
+
+async function importOAuthToken(providerId, prefix) {
+  var accessInp = document.getElementById(prefix + '-token-access')
+  var refreshInp = document.getElementById(prefix + '-token-refresh')
+  var access = accessInp ? accessInp.value.trim() : ''
+  var refresh = refreshInp ? refreshInp.value.trim() : ''
+  if (!access && !refresh) {
+    toast('请至少填写 Access Token 或 Refresh Token', 'error')
+    return
+  }
+
+  try {
+    var r = await fetch('/admin/api/oauth/openai/import-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessToken: access,
+        refreshToken: refresh,
+        providerId: providerId || 'openai'
+      })
+    })
+    var d = await r.json()
+    if (d.success) {
+      toast(d.message || '令牌保存成功！', 'success')
+      setTimeout(function() { location.reload() }, 1500)
+    } else {
+      toast(d.message || '保存失败', 'error')
     }
   } catch (e) {
     toast('网络请求失败', 'error')

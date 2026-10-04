@@ -30,11 +30,18 @@ export const KV_KEYS = {
 } as const
 
 export const OPENAI_OAUTH_CONFIG = {
-  AUTHORIZE_URL: 'https://auth.openai.com/api/accounts/authorize',
-  TOKEN_URL: 'https://auth.openai.com/api/accounts/oauth/token',
-  DEFAULT_CLIENT_ID: 'dynamic_agent_client',
-  SCOPE: 'openid profile email offline_access model.request',
-  SESSION_TTL: 10 * 60, // 10 分钟临时会话
+  // Codex CLI 公用客户端配置（免自建应用）
+  CODEX_CLIENT_ID: 'app_EMoamEEZ73f0CkXaXp7hrann',
+  CODEX_REDIRECT_URI: 'http://localhost:1455/auth/callback',
+  CODEX_AUTHORIZE_URL: 'https://auth.openai.com/oauth/authorize',
+  CODEX_TOKEN_URL: 'https://auth.openai.com/oauth/token',
+
+  // 默认授权端点与有效 OIDC 作用域
+  AUTHORIZE_URL: 'https://auth.openai.com/oauth/authorize',
+  TOKEN_URL: 'https://auth.openai.com/oauth/token',
+  DEFAULT_CLIENT_ID: 'app_EMoamEEZ73f0CkXaXp7hrann',
+  SCOPE: 'openid profile email offline_access',
+  SESSION_TTL: 15 * 60, // 15 分钟临时会话
 }
 
 // 有效期选项（秒）
