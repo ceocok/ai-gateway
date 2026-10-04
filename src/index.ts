@@ -3,7 +3,7 @@ import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import type { Env } from './types'
 import { adminAuthMiddleware, proxyKeyAuthMiddleware, handleLogin, handleLogout } from './auth'
-import { handleProxy, handleModels } from './proxy'
+import { handleProxy, handleModels, handleGetModel } from './proxy'
 import {
   handleStatus,
   handleGetProviders,
@@ -16,6 +16,7 @@ import {
   handleGetProviderHealth,
   handleRecoverProvider,
   handleGetCallStatuses,
+  handleClearCallStatuses,
   handleGetProxyKeys,
   handleCreateProxyKey,
   handleUpdateProxyKey,
@@ -80,6 +81,7 @@ app.post('/admin/api/providers/import-sub2api', handleImportSub2Api)
 app.get('/admin/api/providers/health', handleGetProviderHealth)
 app.post('/admin/api/providers/:id/recover', handleRecoverProvider)
 app.get('/admin/api/calls/status', handleGetCallStatuses)
+app.delete('/admin/api/calls/status', handleClearCallStatuses)
 
 // 转发 Key 管理
 app.get('/admin/api/proxy-keys', handleGetProxyKeys)
@@ -97,11 +99,12 @@ app.get('/admin/oauth/openai/callback', handleOpenAIOAuthCallback)
 // 模型目录允许公开读取，实际模型调用仍必须通过转发 Key 验证。
 app.use('/v1/*', async (c, next) => {
   const url = new URL(c.req.url)
-  if (c.req.method === 'GET' && url.pathname === '/v1/models') return next()
+  if (c.req.method === 'GET' && url.pathname.startsWith('/v1/models')) return next()
   return proxyKeyAuthMiddleware(c, next)
 })
 
 app.get('/v1/models', handleModels)
+app.get('/v1/models/:model', handleGetModel)
 app.all('/v1/*', handleProxy)
 
 // ===== 404 处理 =====

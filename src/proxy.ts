@@ -165,7 +165,8 @@ export async function testModelConnection(
 ): Promise<{ success: boolean; message: string; statusCode?: number }> {
   const normalizedApiKey = normalizeProviderApiKey(apiKey)
   try {
-    const endpoint = apiType === 'anthropic' ? 'messages' : 'chat/completions'
+    const isEmbedding = /embedding/i.test(modelId)
+    const endpoint = isEmbedding ? 'embeddings' : (apiType === 'anthropic' ? 'messages' : 'chat/completions')
     const urls = buildEndpointUrls(baseUrl, endpoint)
 
     const headers: Record<string, string> = {
@@ -180,15 +181,23 @@ export async function testModelConnection(
     }
 
     let lastResponse: Response | null = null
-    const isReasoning = /^o[1-9]/i.test(modelId)
-    const testPayload: Record<string, unknown> = {
-      model: modelId,
-      messages: [{ role: 'user', content: 'hi' }],
-    }
-    if (isReasoning) {
-      testPayload.max_completion_tokens = 10
+    let testPayload: Record<string, unknown>
+    if (isEmbedding) {
+      testPayload = {
+        model: modelId,
+        input: 'hi',
+      }
     } else {
-      testPayload.max_tokens = 1
+      const isReasoning = /^o[1-9]/i.test(modelId)
+      testPayload = {
+        model: modelId,
+        messages: [{ role: 'user', content: 'hi' }],
+      }
+      if (isReasoning) {
+        testPayload.max_completion_tokens = 10
+      } else {
+        testPayload.max_tokens = 1
+      }
     }
 
     for (let i = 0; i < urls.length; i++) {
@@ -265,19 +274,25 @@ export async function testModelConnection(
 /** 处理 /v1/chat/completions 等 API 转发 */
 export async function handleProxy(c: Context<{ Bindings: Env }>) {
   try {
-    const body = await c.req.json<ProxyRequestBody>()
-    const model = body.model
+    let body: ProxyRequestBody
+    try {
+      body = await c.req.json<ProxyRequestBody>()
+    } catch {
+      return c.json({ error: { message: '请求体必须是有效的 JSON 格式', type: 'invalid_request_error' } }, 400)
+    }
 
+    const model = body.model
     if (!model) {
       return c.json({ error: { message: '缺少 model 参数', type: 'invalid_request_error' } }, 400)
     }
 
     const forwardBody = { ...body }
     const parsed = parseModelId(model)
+    const allProviders = await getProviders(c.env)
 
     if (parsed) {
       // 显式指定提供商: providerId/modelId
-      const provider = await getProvider(c.env, parsed.providerId)
+      const provider = allProviders.find(p => p.id === parsed.providerId)
       if (!provider) {
         return c.json({ error: { message: `提供商 "${parsed.providerId}" 不存在`, type: 'invalid_request_error' } }, 404)
       }
@@ -290,7 +305,6 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
     // 无前缀：搜索所有已启用提供商，随机容灾切换
     const modelId = model
     forwardBody.model = modelId
-    const allProviders = await getProviders(c.env)
     const candidates = allProviders.filter(p =>
       p.enabled && p.models.some(m => m.id === modelId && m.enabled)
     )
@@ -308,10 +322,9 @@ export async function handleProxy(c: Context<{ Bindings: Env }>) {
 
     let lastName = ''
     for (const candidate of candidates) {
-      const provider = await getProvider(c.env, candidate.id)
-      if (!provider || !provider.enabled) continue
-      lastName = provider.name
-      const result = await tryProvider(c, provider, modelId, model, forwardBody)
+      if (!candidate.enabled) continue
+      lastName = candidate.name
+      const result = await tryProvider(c, candidate, modelId, model, forwardBody)
       if (result) return result
     }
 
@@ -396,6 +409,10 @@ async function tryProvider(
     try {
       const forwardHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
+      }
+      const clientAccept = c.req.header('accept')
+      if (clientAccept) {
+        forwardHeaders['Accept'] = clientAccept
       }
       let tokenToUse = apiKey
       const isOAuth = keyEntry.type === 'openai-oauth' || provider.apiType === 'openai-oauth'
@@ -616,24 +633,100 @@ export async function handleModels(c: Context<{ Bindings: Env }>) {
     }
   }
 
+  const nowSec = Math.floor(Date.now() / 1000)
   const models: Array<{
     id: string
     object: string
     created: number
     owned_by: string
+    permission: Array<{
+      id: string
+      object: string
+      created: number
+      allow_create_engine: boolean
+      allow_sampling: boolean
+      allow_logprobs: boolean
+      allow_search_indices: boolean
+      allow_view: boolean
+      allow_fine_tuning: boolean
+      organization: string
+      group: null
+      is_blocking: boolean
+    }>
+    root: string
+    parent: null
   }> = []
 
   for (const [modelId, providerNames] of modelMap) {
     models.push({
       id: modelId,
       object: 'model',
-      created: Math.floor(Date.now() / 1000),
+      created: nowSec,
       owned_by: providerNames.join(', '),
+      permission: [
+        {
+          id: `modelperm-${modelId}`,
+          object: 'model_permission',
+          created: nowSec,
+          allow_create_engine: false,
+          allow_sampling: true,
+          allow_logprobs: true,
+          allow_search_indices: false,
+          allow_view: true,
+          allow_fine_tuning: false,
+          organization: '*',
+          group: null,
+          is_blocking: false,
+        },
+      ],
+      root: modelId,
+      parent: null,
     })
   }
 
   return c.json({
     object: 'list',
     data: models,
+  })
+}
+
+/** 处理 /v1/models/:model — 返回单个模型的 OpenAI 兼容元信息 */
+export async function handleGetModel(c: Context<{ Bindings: Env }>) {
+  const modelParam = c.req.param('model')
+  if (!modelParam) {
+    return c.json({ error: { message: '缺少 model 参数', type: 'invalid_request_error' } }, 400)
+  }
+  const providers = await getProviders(c.env)
+  const candidateProviders = providers.filter(p =>
+    p.enabled && p.models.some(m => m.id === modelParam && m.enabled)
+  )
+  if (candidateProviders.length === 0) {
+    return c.json({ error: { message: `模型 "${modelParam}" 不存在于任何已启用的提供商中`, type: 'model_not_found' } }, 404)
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000)
+  return c.json({
+    id: modelParam,
+    object: 'model',
+    created: nowSec,
+    owned_by: candidateProviders.map(p => p.name).join(', '),
+    permission: [
+      {
+        id: `modelperm-${modelParam}`,
+        object: 'model_permission',
+        created: nowSec,
+        allow_create_engine: false,
+        allow_sampling: true,
+        allow_logprobs: true,
+        allow_search_indices: false,
+        allow_view: true,
+        allow_fine_tuning: false,
+        organization: '*',
+        group: null,
+        is_blocking: false,
+      },
+    ],
+    root: modelParam,
+    parent: null,
   })
 }

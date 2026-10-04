@@ -232,6 +232,13 @@ export async function getRecentCallStatuses(env: Env): Promise<CallStatusRecord[
     .filter((item): item is CallStatusRecord => item !== null)
     .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
 }
+
+export async function clearRecentCallStatuses(env: Env): Promise<void> {
+  const raw = await env.KV.get(KV_KEYS.CALL_STATUS_RECENT)
+  const ids = raw ? JSON.parse(raw) as string[] : []
+  await Promise.all(ids.map((id) => env.KV.delete(callStatusKey(id)).catch(() => {})))
+  await env.KV.delete(KV_KEYS.CALL_STATUS_RECENT).catch(() => {})
+}
 // ===== Session 管理 =====
 
 export async function createSession(env: Env, username: string, ttlSeconds: number): Promise<string> {

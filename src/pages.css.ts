@@ -1799,6 +1799,7 @@ footer a:hover {
 
 .proxy-key-header-key { flex: 1; min-width: 0; }
 .proxy-key-header-name { width: 80px; text-align: center; }
+.proxy-key-header-expiry { width: 75px; text-align: center; }
 .proxy-key-header-status { width: 72px; text-align: center; }
 .proxy-key-header-toggle { width: 50px; text-align: right; }
 .proxy-key-header-del { width: 36px; text-align: right; }
@@ -1811,6 +1812,13 @@ footer a:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ki-expiry {
+  width: 75px;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--text-muted);
 }
 
 .ki-status {

@@ -272,6 +272,16 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
   const enabledModels = providers.reduce((sum, p) => sum + p.models.filter(m => m.enabled).length, 0)
   const enabledProxyKeys = proxyKeys.filter(k => k.enabled).length
 
+  function renderKeyExpiry(expiresAt?: string | null): string {
+    if (!expiresAt) return '<span style="color:var(--text-muted);font-size:0.72rem;">永久</span>'
+    const expTime = new Date(expiresAt).getTime()
+    const now = Date.now()
+    if (now >= expTime) return '<span class="bd bd-danger" style="font-size:0.65rem;padding:1px 6px;">已过期</span>'
+    const daysLeft = Math.ceil((expTime - now) / (1000 * 60 * 60 * 24))
+    const formatted = new Date(expiresAt).toLocaleDateString('zh-CN')
+    return `<span style="font-size:0.72rem;color:var(--zinc-300);" title="过期时间: ${formatted}">剩 ${daysLeft} 天</span>`
+  }
+
   function renderOAuthBox(providerId = '', email = '', isVisible = false, oauthKey?: ApiKeyEntry) {
     const isAdd = !providerId
     const prefix = isAdd ? 'a' : `e-${providerId}`
@@ -408,7 +418,15 @@ ${renderHeader(true, false)}
       <p class="eyebrow">Live Calls</p>
       <h2><i class="fas fa-signal"></i> 实时调用状态</h2>
     </div>
-    <button class="btn btn-gh btn-xs" onclick="loadCallStatus()"><i class="fas fa-sync"></i> 刷新</button>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label class="tg" style="display:inline-flex;align-items:center;gap:6px;width:auto;height:auto;cursor:pointer;" title="开启后每 5 秒自动更新一次">
+        <input type="checkbox" id="autoRefreshCalls" onchange="toggleAutoRefresh(this.checked)">
+        <span class="sl"></span>
+        <span style="font-size:0.72rem;color:var(--text-muted);text-transform:none;letter-spacing:0;font-weight:500;">自动刷新</span>
+      </label>
+      <button class="btn btn-gh btn-xs" onclick="loadCallStatus()"><i class="fas fa-sync"></i> 刷新</button>
+      <button class="btn btn-gh btn-xs" onclick="clearCallStatus()" title="清空调用记录" style="color:var(--danger);"><i class="fas fa-trash-alt"></i> 清空</button>
+    </div>
   </div>
   <div class="call-stat-grid">
     <div class="call-stat"><span>运行中</span><strong id="cs-active">0</strong></div>
@@ -467,6 +485,12 @@ ${renderHeader(true, false)}
             <button class="btn btn-gh btn-xs" id="adiscover" onclick="discoverModels()">
               <i class="fas fa-cloud-download-alt"></i> 获取模型
             </button>
+            <button class="btn btn-gh btn-xs" type="button" onclick="toggleAllAddModels(true)" title="全部启用">
+              <i class="fas fa-check-double"></i> 全部启用
+            </button>
+            <button class="btn btn-gh btn-xs" type="button" onclick="toggleAllAddModels(false)" title="全部禁用">
+              <i class="fas fa-ban"></i> 全部禁用
+            </button>
             <button class="btn btn-gh btn-xs" type="button" onclick="clearAddModels()" title="清空全部已添加模型" style="color:var(--danger);">
               <i class="fas fa-trash-alt"></i> 清空全部
             </button>
@@ -496,11 +520,22 @@ ${renderHeader(true, false)}
     </div>
   </div>
 
+  <!-- Provider Search & Filter Bar -->
+  <div style="padding:14px 20px 0;display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;">
+    <div style="position:relative;flex:1;max-width:380px;">
+      <i class="fas fa-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:0.75rem;"></i>
+      <input type="text" id="provSearch" placeholder="搜索提供商名称、地址或包含的模型..." style="padding-left:28px;font-size:0.78rem;height:32px;width:100%;border-radius:6px;background:var(--input-bg);border:1px solid var(--input-border);color:var(--zinc-100);" oninput="filterAdminProviders(this.value)">
+    </div>
+    <div style="font-size:0.72rem;color:var(--text-muted);display:flex;align-items:center;gap:8px;">
+      <span id="provFilterCount">共 ${providers.length} 个提供商</span>
+    </div>
+  </div>
+
   <!-- Provider Workbench -->
   <div class="provider-workbench">
     <div class="provider-list" aria-label="提供商列表">
       ${providers.length ? providers.map(p => `
-      <div class="pi" data-id="${p.id}" onclick="selectProvider('${p.id}')">
+      <div class="pi" data-id="${p.id}" data-search="${escHtml((p.name + ' ' + p.baseUrl + ' ' + (p.apiType || '') + ' ' + p.models.map(m=>m.id).join(' ')).toLowerCase())}" onclick="selectProvider('${p.id}')">
         <div class="ps">
           <div class="l">
             <i class="fas fa-fw fa-server"></i>
@@ -522,7 +557,7 @@ ${renderHeader(true, false)}
           <span class="provider-edit-action"><i class="fas fa-pen"></i> 编辑</span>
         </div>
         <div class="provider-card-meta">
-          <span><i class="fas fa-link"></i>${escHtml(p.baseUrl)}</span>
+          <span onclick="event.stopPropagation();copyText('${escHtml(p.baseUrl)}',this)" class="cp" title="点击复制地址"><i class="fas fa-link"></i>${escHtml(p.baseUrl)}</span>
           <span><i class="fas fa-key"></i>${p.apiKeys.filter(k => k.enabled).length} 个可用 Key</span>
         </div>
       </div>
@@ -585,6 +620,12 @@ ${renderHeader(true, false)}
               <button class="btn btn-gh btn-xs" id="mdiscover-${p.id}" onclick="discoverProviderModels('${escHtml(p.id)}')">
                 <i class="fas fa-cloud-download-alt"></i> 获取模型
               </button>
+              <button class="btn btn-gh btn-xs" type="button" onclick="toggleAllModels('${escHtml(p.id)}', true)" title="全部启用所有模型">
+                <i class="fas fa-check-double"></i> 全部启用
+              </button>
+              <button class="btn btn-gh btn-xs" type="button" onclick="toggleAllModels('${escHtml(p.id)}', false)" title="全部禁用所有模型">
+                <i class="fas fa-ban"></i> 全部禁用
+              </button>
               <button class="btn btn-gh btn-xs" type="button" onclick="clearAllModels('${escHtml(p.id)}')" title="清空下方已添加的全部模型" style="color:var(--danger);">
                 <i class="fas fa-trash-alt"></i> 清空全部
               </button>
@@ -633,6 +674,7 @@ ${renderHeader(true, false)}
       ? `<div class="proxy-key-header">
           <span class="proxy-key-header-key">Key</span>
           <span class="proxy-key-header-name">名称</span>
+          <span class="proxy-key-header-expiry">有效期</span>
           <span class="proxy-key-header-status">状态</span>
           <span class="proxy-key-header-toggle"></span>
           <span class="proxy-key-header-del"></span>
@@ -649,6 +691,7 @@ ${renderHeader(true, false)}
           <i class="fas fa-copy cp" style="font-size:0.7rem;color:var(--text-muted);cursor:pointer;" onclick='copyText("${escHtml(pk.key)}",this)'></i>
         </div>
         <div class="ki-name">${pk.name || '-'}</div>
+        <div class="ki-expiry">${renderKeyExpiry(pk.expiresAt)}</div>
         <div class="ki-status">
           <span class="bd ${pk.enabled ? 'bd-on' : 'bd-off'}">${pk.enabled ? '已启用' : '已禁用'}</span>
         </div>
@@ -718,15 +761,38 @@ function closeM() { const o = document.querySelector('.generic-modal-overlay'); 
 
 function cM(msg) {
   return new Promise(function(resolve) {
-    showM('<h3><i class="fas fa-exclamation-triangle" style="color:var(--amber-400);"></i> 确认</h3><p>' + msg + '</p><div class="fa" style="justify-content:flex-end;"><button class="btn btn-s" onclick="closeM();resolve(false)">取消</button><button class="btn btn-p" onclick="closeM();resolve(true)">确定</button></div>')
-    window.resolve = resolve
+    showM('<h3><i class="fas fa-exclamation-triangle" style="color:var(--amber-400);"></i> 确认</h3><p>' + escHtml(msg) + '</p><div class="fa" style="justify-content:flex-end;"><button class="btn btn-s" id="cM-no">取消</button><button class="btn btn-p" id="cM-yes">确定</button></div>')
+    var noBtn = document.getElementById('cM-no')
+    if (noBtn) noBtn.onclick = function() { closeM(); resolve(false) }
+    var yesBtn = document.getElementById('cM-yes')
+    if (yesBtn) yesBtn.onclick = function() { closeM(); resolve(true) }
   })
 }
 
 function pM(msg) {
   return new Promise(function(resolve) {
-    showM('<h3><i class="fas fa-pen" style="color:var(--primary);"></i> 输入</h3><p>' + msg + '</p><div class="fg"><input type="text" id="pMinp" placeholder="输入内容"></div><div class="fa" style="justify-content:flex-end;"><button class="btn btn-s" onclick="closeM();resolve(null)">取消</button><button class="btn btn-p" onclick="closeM();resolve(document.getElementById(\\'pMinp\\').value.trim() || null)">确定</button></div>')
-    window.resolve = resolve
+    showM('<h3><i class="fas fa-pen" style="color:var(--primary);"></i> 输入</h3><p>' + escHtml(msg) + '</p><div class="fg"><input type="text" id="pMinp" placeholder="输入内容"></div><div class="fa" style="justify-content:flex-end;"><button class="btn btn-s" id="pM-cancel">取消</button><button class="btn btn-p" id="pM-ok">确定</button></div>')
+    var cancelBtn = document.getElementById('pM-cancel')
+    if (cancelBtn) cancelBtn.onclick = function() { closeM(); resolve(null) }
+    var okBtn = document.getElementById('pM-ok')
+    if (okBtn) okBtn.onclick = function() {
+      var val = (document.getElementById('pMinp').value || '').trim()
+      closeM()
+      resolve(val || null)
+    }
+    setTimeout(function() {
+      var inp = document.getElementById('pMinp')
+      if (inp) {
+        inp.focus()
+        inp.onkeydown = function(e) {
+          if (e.key === 'Enter') {
+            var val = (inp.value || '').trim()
+            closeM()
+            resolve(val || null)
+          }
+        }
+      }
+    }, 50)
   })
 }
 
@@ -738,6 +804,26 @@ function toast(msg, t) {
   el.innerHTML = '<div class="al" style="background:' + bg + ';color:' + c + ';border-color:transparent;"><i class="fas ' + i + '"></i> ' + msg + '</div>'
   el.classList.remove('hd')
   setTimeout(function() { el.classList.add('hd') }, 3500)
+}
+
+// ── Provider filter ──
+function filterAdminProviders(kw) {
+  var term = (kw || '').trim().toLowerCase()
+  var items = document.querySelectorAll('.provider-list .pi')
+  var visible = 0
+  items.forEach(function(el) {
+    var searchData = el.dataset.search || ''
+    if (!term || searchData.indexOf(term) !== -1) {
+      el.style.display = ''
+      visible++
+    } else {
+      el.style.display = 'none'
+    }
+  })
+  var cntEl = document.getElementById('provFilterCount')
+  if (cntEl) {
+    cntEl.textContent = term ? ('匹配 ' + visible + ' / ' + items.length + ' 个提供商') : ('共 ' + items.length + ' 个提供商')
+  }
 }
 
 // ── Provider editor modal ──
@@ -756,6 +842,10 @@ function selectProvider(id) {
   overlay.tabIndex = -1
   overlay.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') closeProviderEditor()
+    if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+      event.preventDefault()
+      save(id)
+    }
   })
   document.body.appendChild(overlay)
   overlay.focus()
@@ -1022,6 +1112,19 @@ function testNewMdl(btn) {
       if (tr) tr.innerHTML = ''
     }, 6000)
   })
+}
+
+function toggleAllAddModels(enabled) {
+  var c = document.getElementById('amodels')
+  if (!c) return
+  var rows = c.querySelectorAll('.fc')
+  if (rows.length === 0) {
+    toast('当前列表中没有模型', 'info')
+    return
+  }
+  var checkboxes = c.querySelectorAll('.ame')
+  checkboxes.forEach(function(cb) { cb.checked = enabled })
+  toast('已' + (enabled ? '启用' : '禁用') + '全部 ' + checkboxes.length + ' 个模型', 'info')
 }
 
 async function clearAddModels() {
@@ -1391,6 +1494,19 @@ function rmMdl(id, idx) {
   }
 }
 
+function toggleAllModels(id, enabled) {
+  var c = document.getElementById('ml-' + id)
+  if (!c) return
+  var rows = c.querySelectorAll('[data-idx]')
+  if (rows.length === 0) {
+    toast('当前列表中没有模型', 'info')
+    return
+  }
+  var checkboxes = c.querySelectorAll('input[type="checkbox"][id^="men-"]')
+  checkboxes.forEach(function(cb) { cb.checked = enabled })
+  toast('已' + (enabled ? '启用' : '禁用') + '全部 ' + checkboxes.length + ' 个模型（需点击下方「保存」生效）', 'info')
+}
+
 async function clearAllModels(id) {
   const c = document.getElementById('ml-' + id)
   if (!c) return
@@ -1710,6 +1826,36 @@ async function loadCallStatus() {
   }
 }
 
+var autoRefreshTimer = null
+function toggleAutoRefresh(enabled) {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
+  if (enabled) {
+    autoRefreshTimer = setInterval(loadCallStatus, 5000)
+    toast('已开启实时监控自动刷新 (5s)', 'info')
+  } else {
+    toast('已关闭自动刷新', 'info')
+  }
+}
+
+async function clearCallStatus() {
+  if (!(await cM('确定要清空所有实时调用记录吗？'))) return
+  try {
+    var r = await fetch('/admin/api/calls/status', { method: 'DELETE' })
+    var d = await r.json()
+    if (d.success) {
+      toast('调用记录已清空', 'success')
+      loadCallStatus()
+    } else {
+      toast(d.message || '清空失败', 'error')
+    }
+  } catch (e) {
+    toast('请求失败', 'error')
+  }
+}
+
 // ── Health ──
 async function loadHealth() {
   try {
@@ -1734,7 +1880,7 @@ async function loadHealth() {
         var html = ''
         if (p.health && p.health.autoPaused) {
           html += '<div class="al al-e" style="margin-bottom:6px;"><i class="fas fa-exclamation-circle"></i> <b>已自动暂停</b><br><span style="font-size:0.68rem;">' + escHtml(p.health.lastError) + '</span></div>'
-          html += '<div class="fc gap-8"><button class="btn btn-p btn-xs" onclick="recoverProv(\\'' + p.id + '\\')"><i class="fas fa-sync"></i> 恢复</button></div>'
+          html += '<div class="fc gap-8"><button class="btn btn-p btn-xs" onclick="recoverProv(&quot;' + p.id + '&quot;)"><i class="fas fa-sync"></i> 恢复</button></div>'
         } else if (p.keyStats && p.keyStats.demoted > 0) {
           html += '<div class="al al-i" style="margin-bottom:6px;"><i class="fas fa-info-circle"></i> <b>部分 Key 降级</b><br><span style="font-size:0.68rem;">' + p.keyStats.healthy + '/' + p.keyStats.total + ' 个 Key 健康，' + p.keyStats.demoted + ' 个已降权</span></div>'
         } else if (p.keyStats && p.keyStats.total > 0) {

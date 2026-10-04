@@ -10,6 +10,7 @@ import {
   clearProviderKeyHealth,
   getAllProviderHealth,
   getRecentCallStatuses,
+  clearRecentCallStatuses,
   recoverProvider,
   getProxyKeys,
   addProxyKey,
@@ -789,6 +790,11 @@ export async function handleGetCallStatuses(c: Context<{ Bindings: Env }>) {
       records: recent,
     },
   })
+}
+
+export async function handleClearCallStatuses(c: Context<{ Bindings: Env }>) {
+  await clearRecentCallStatuses(c.env)
+  return c.json<ApiResponse>({ success: true, message: '调用状态记录已清空' })
 }
 
 // ===== 转发 Key 管理 =====
