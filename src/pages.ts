@@ -1,6 +1,6 @@
 import { Context } from 'hono'
 import { getProviders, getProxyKeys } from './storage'
-import { SITE_CONFIG } from './config'
+import { SITE_CONFIG, DEFAULT_PROVIDER_MODELS } from './config'
 import type { Env } from './types'
 import { CSS_CONTENT } from './pages.css'
 
@@ -450,9 +450,14 @@ ${renderHeader(true, false)}
       <div class="fg">
         <div class="model-field-head">
           <label>模型</label>
-          <button class="btn btn-gh btn-xs" id="adiscover" onclick="discoverModels()">
-            <i class="fas fa-cloud-download-alt"></i> 获取模型
-          </button>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <button class="btn btn-gh btn-xs" type="button" onclick="prefillAddModels()">
+              <i class="fas fa-sparkles"></i> 预填最新模型
+            </button>
+            <button class="btn btn-gh btn-xs" id="adiscover" onclick="discoverModels()">
+              <i class="fas fa-cloud-download-alt"></i> 获取模型
+            </button>
+          </div>
         </div>
         <div class="model-discovery-hint">填写 API 地址和 Key 后获取可用模型；不支持模型列表接口时可手动添加。</div>
         <label class="manual-model-label">手动添加模型 ID</label>
@@ -560,9 +565,14 @@ ${renderHeader(true, false)}
         <div class="fg">
           <div class="model-field-head">
             <label>模型</label>
-            <button class="btn btn-gh btn-xs" id="mdiscover-${p.id}" onclick="discoverProviderModels('${escHtml(p.id)}')">
-              <i class="fas fa-cloud-download-alt"></i> 获取模型
-            </button>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <button class="btn btn-gh btn-xs" type="button" onclick="prefillLatestModels('${escHtml(p.id)}')">
+                <i class="fas fa-sparkles"></i> 预填最新模型
+              </button>
+              <button class="btn btn-gh btn-xs" id="mdiscover-${p.id}" onclick="discoverProviderModels('${escHtml(p.id)}')">
+                <i class="fas fa-cloud-download-alt"></i> 获取模型
+              </button>
+            </div>
           </div>
           <div class="model-discovery-hint">使用当前 API 地址和 Key 读取可用模型；获取后可批量加入编辑列表。</div>
           <div id="mp-${p.id}" class="model-discovery-inline hd"></div>
@@ -658,6 +668,29 @@ ${renderHeader(true, false)}
 <footer><div class="ct">&copy; ${new Date().getFullYear()} <a href="${SITE_CONFIG.authorUrl}" target="_blank">${SITE_CONFIG.title}</a> by <a href="${SITE_CONFIG.blogUrl}" target="_blank">${SITE_CONFIG.author}</a></div></footer>
 
 <script>
+const PROVIDER_PRESET_MODELS = ${JSON.stringify(DEFAULT_PROVIDER_MODELS)};
+
+function getProviderPresetModels(id, apiType, url) {
+  if (apiType === 'openai-oauth') return PROVIDER_PRESET_MODELS['openai-oauth'] || PROVIDER_PRESET_MODELS['openai']
+  if (apiType === 'anthropic' || (url && url.includes('anthropic'))) return PROVIDER_PRESET_MODELS['anthropic']
+  if (url && (url.includes('deepseek') || url.includes('deepseek.com'))) return PROVIDER_PRESET_MODELS['deepseek']
+  if (url && (url.includes('generativelanguage.googleapis.com') || url.includes('gemini'))) return PROVIDER_PRESET_MODELS['gemini']
+  if (id === 'deepseek') return PROVIDER_PRESET_MODELS['deepseek']
+  if (id === 'anthropic') return PROVIDER_PRESET_MODELS['anthropic']
+  if (id === 'gemini') return PROVIDER_PRESET_MODELS['gemini']
+  return PROVIDER_PRESET_MODELS['openai']
+}
+
+function prefillAddModels() {
+  const apiType = document.getElementById('afmt')?.value || 'openai'
+  const url = document.getElementById('aurl')?.value.trim() || ''
+  const models = getProviderPresetModels('new', apiType, url)
+  const panel = document.getElementById('amc')
+  panel.classList.remove('hd')
+  renderDiscoveredModels(models)
+  toast('已加载最新模型候选列表，勾选后即可保存', 'info')
+}
+
 // ── Modal ──
 function showM(h) {
   const o = document.createElement('div')
@@ -780,17 +813,29 @@ async function discoverModels(apiKey, triggerButton) {
     })
     const d = await r.json()
     const result = d.data || {}
-    if (d.success && result.success) {
+    if (d.success && result.success && result.models && result.models.length > 0) {
       renderDiscoveredModels(result.models || [])
       tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 连接成功' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
     } else {
-      list.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>未能读取模型列表，可继续手动填写。</span></div>'
-      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
+      const presets = getProviderPresetModels('new', apiType, url)
+      if (presets && presets.length > 0) {
+        renderDiscoveredModels(presets)
+        tr.innerHTML = '<div class="al al-s"><i class="fas fa-info-circle"></i> 上游未返回模型列表，已自动加载官方最新模型列表供选用</div>'
+      } else {
+        list.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>未能读取模型列表，可点击「预填最新模型」或手动填写。</span></div>'
+        tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
+      }
     }
     setTimeout(function() { tr.innerHTML = '' }, 5000)
   } catch (e) {
-    list.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>请求失败，可继续手动填写。</span></div>'
-    tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
+    const presets = getProviderPresetModels('new', apiType, url)
+    if (presets && presets.length > 0) {
+      renderDiscoveredModels(presets)
+      tr.innerHTML = '<div class="al al-s"><i class="fas fa-info-circle"></i> 探查超时，已预填官方最新模型列表供选用</div>'
+    } else {
+      list.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>请求失败，可点击「预填最新模型」或手动填写。</span></div>'
+      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
+    }
     setTimeout(function() { tr.innerHTML = '' }, 5000)
   } finally {
     buttons.forEach(function(button) { button.disabled = false })
@@ -944,7 +989,7 @@ function getKeys(id) {
 function getProviderProbeKey(id) {
   const rows = document.querySelectorAll('#keys-' + id + ' > [data-kidx]')
   const values = Array.from(rows).map(function(row) {
-    const input = row.querySelector('input[type="text"]')
+    const input = row.querySelector('input[type="text"], input[type="hidden"]')
     const enabled = row.querySelector('input[id^="ken-"]')?.checked ?? true
     return { value: input?.value.trim() || '', enabled: enabled }
   }).filter(function(item) { return item.value })
@@ -982,7 +1027,7 @@ async function testKeyRow(id, idx) {
     const r = await fetch('/admin/api/providers/probe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseUrl: url, apiKey: k, apiType: apiType })
+      body: JSON.stringify({ providerId: id, baseUrl: url, apiKey: k, apiType: apiType })
     })
     const d = await r.json()
     const result = d.data || {}
@@ -1006,7 +1051,7 @@ async function discoverProviderModels(id) {
   const tr = document.getElementById('tr-' + id)
 
   if (!url) { toast('请先填写 API 地址', 'error'); return }
-  if (!apiKey) { toast('请先填写 API Key', 'error'); return }
+  if (!apiKey && apiType !== 'openai-oauth') { toast('请先填写 API Key', 'error'); return }
 
   button.disabled = true
   panel.classList.remove('hd')
@@ -1017,25 +1062,47 @@ async function discoverProviderModels(id) {
     const r = await fetch('/admin/api/providers/probe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseUrl: url, apiKey: apiKey, apiType: apiType })
+      body: JSON.stringify({ providerId: id, baseUrl: url, apiKey: apiKey, apiType: apiType })
     })
     const d = await r.json()
     const result = d.data || {}
-    if (d.success && result.success) {
+    if (d.success && result.success && result.models && result.models.length > 0) {
       renderEditDiscoveredModels(id, result.models || [])
-      tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 已读取模型' + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
+      tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> ' + (result.message || ('已读取 ' + result.models.length + ' 个模型')) + (result.statusCode ? ' (HTTP ' + result.statusCode + ')' : '') + '</div>'
     } else {
-      panel.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>未能读取模型列表，可继续手动添加。</span></div>'
-      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
+      const presets = getProviderPresetModels(id, apiType, url)
+      if (presets && presets.length > 0) {
+        renderEditDiscoveredModels(id, presets)
+        tr.innerHTML = '<div class="al al-s"><i class="fas fa-info-circle"></i> 上游未返回模型列表，已自动加载官方最新模型列表供选用</div>'
+      } else {
+        panel.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>未能读取模型列表，可点击「预填最新模型」或手动添加。</span></div>'
+        tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + (result.message || d.message || '连接失败') + '</div>'
+      }
     }
     setTimeout(function() { tr.innerHTML = '' }, 5000)
   } catch (e) {
-    panel.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>请求失败，可继续手动添加。</span></div>'
-    tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
+    const presets = getProviderPresetModels(id, apiType, url)
+    if (presets && presets.length > 0) {
+      renderEditDiscoveredModels(id, presets)
+      tr.innerHTML = '<div class="al al-s"><i class="fas fa-info-circle"></i> 探查超时，已预填官方最新模型列表供选用</div>'
+    } else {
+      panel.innerHTML = '<div class="model-discovery-state is-error"><i class="fas fa-circle-exclamation"></i><span>请求失败，可点击「预填最新模型」或手动添加。</span></div>'
+      tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> 连接失败</div>'
+    }
     setTimeout(function() { tr.innerHTML = '' }, 5000)
   } finally {
     button.disabled = false
   }
+}
+
+function prefillLatestModels(id) {
+  const apiType = document.getElementById('at-' + id)?.value || 'openai'
+  const url = document.getElementById('url-' + id)?.value.trim() || ''
+  const models = getProviderPresetModels(id, apiType, url)
+  const panel = document.getElementById('mp-' + id)
+  panel.classList.remove('hd')
+  renderEditDiscoveredModels(id, models)
+  toast('已加载最新模型候选列表，可勾选后批量加入', 'info')
 }
 
 function renderEditDiscoveredModels(id, models) {

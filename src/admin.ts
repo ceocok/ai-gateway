@@ -20,7 +20,7 @@ import {
   deleteOpenAIOAuthSession,
 } from './storage'
 import { buildEndpointUrls, normalizeProviderApiKey, testModelConnection } from './proxy'
-import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS, OPENAI_OAUTH_CONFIG } from './config'
+import { PROXY_KEY_PREFIX, EXPIRY_OPTIONS, OPENAI_OAUTH_CONFIG, DEFAULT_OPENAI_MODELS } from './config'
 import type {
   Env,
   ApiResponse,
@@ -93,6 +93,7 @@ function createProviderId(baseUrl: string, name: string, usedIds: Set<string>): 
 }
 
 type ProviderProbeRequest = {
+  providerId?: string
   baseUrl?: string
   apiKey?: string
   apiType?: ProviderApiType
@@ -302,18 +303,60 @@ export async function handleDeleteProvider(c: Context<{ Bindings: Env }>) {
 }
 
 export async function handleProbeProvider(c: Context<{ Bindings: Env }>) {
-  const body = await c.req.json<ProviderProbeRequest>()
+  const body = await c.req.json<ProviderProbeRequest>().catch(() => ({} as ProviderProbeRequest))
   const baseUrl = body.baseUrl?.trim().replace(/\/$/, '')
-  const apiKey = body.apiKey?.trim()
+  const apiKey = body.apiKey?.trim() || ''
   const apiType = body.apiType || 'openai'
+  const providerId = body.providerId?.trim()
 
-  if (!baseUrl || !apiKey) {
+  if (!baseUrl) {
+    return c.json<ApiResponse>({ success: false, message: 'baseUrl 为必填项' }, 400)
+  }
+
+  const provider = providerId ? await getProvider(c.env, providerId) : null
+  let testKey = apiKey
+  let extraHeaders: Record<string, string> | undefined
+  const isOAuth = apiType === 'openai-oauth' || apiKey.startsWith('oauth_') || provider?.apiType === 'openai-oauth'
+
+  if (isOAuth && provider) {
+    const keyEntry = provider.apiKeys.find(k => k.key === apiKey)
+      || provider.apiKeys.find(k => k.type === 'openai-oauth')
+      || provider.apiKeys[0]
+    if (keyEntry) {
+      const resolved = await resolveProviderKeyToken(c.env, provider.id, keyEntry)
+      if (resolved) {
+        testKey = resolved.token
+        if (resolved.chatgptAccountId) {
+          extraHeaders = { 'ChatGPT-Account-Id': resolved.chatgptAccountId }
+        }
+      }
+    }
+  }
+
+  if (!testKey && !isOAuth) {
     return c.json<ApiResponse>({ success: false, message: 'baseUrl 和 apiKey 为必填项' }, 400)
   }
 
-  const result = body.modelId
-    ? await testModelConnection(baseUrl, apiKey, body.modelId, apiType)
-    : await fetchProviderModels(baseUrl, apiKey, apiType)
+  let result: { success: boolean; message: string; statusCode?: number; models?: string[] }
+  if (body.modelId) {
+    result = await testModelConnection(baseUrl, testKey, body.modelId, apiType, extraHeaders)
+  } else {
+    result = await fetchProviderModels(baseUrl, testKey, apiType, extraHeaders)
+  }
+
+  // 如果是 OpenAI OAuth 探测模型，尝试使用真实 token 访问 /v1/models；
+  // 如果上游返回 401/403/失败或模型列表为空（ChatGPT 账户通常没有 developer /v1/models 权限），
+  // 自动回退为官方全量最新模型列表并提示
+  if (!body.modelId && isOAuth) {
+    if (!result.success || !result.models || result.models.length === 0) {
+      result = {
+        success: true,
+        message: 'ChatGPT OAuth 已验证，已预填官方最新模型列表',
+        statusCode: result.statusCode,
+        models: DEFAULT_OPENAI_MODELS,
+      }
+    }
+  }
 
   return c.json<ApiResponse>({ success: true, data: result })
 }
@@ -778,9 +821,21 @@ export async function bindOpenAITokenToProvider(
     } else {
       nextKeys = [...provider.apiKeys, newApiKeyEntry]
     }
+
+    const hasDefaultFourOnly = provider.models.length <= 4 && provider.models.every(m => ['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini'].includes(m.id))
+    let nextModels = provider.models
+    if (provider.models.length === 0 || hasDefaultFourOnly) {
+      const existingMap = new Map(provider.models.map(m => [m.id, m.enabled]))
+      nextModels = DEFAULT_OPENAI_MODELS.map(id => ({
+        id,
+        enabled: existingMap.has(id) ? (existingMap.get(id) ?? true) : true,
+      }))
+    }
+
     await updateProvider(env, provider.id, {
       apiKeys: nextKeys,
       apiType: provider.apiType || 'openai-oauth',
+      models: nextModels,
       enabled: true,
     })
   } else {
@@ -791,12 +846,7 @@ export async function bindOpenAITokenToProvider(
       baseUrl: 'https://api.openai.com/v1',
       apiType: 'openai-oauth',
       apiKeys: [newApiKeyEntry],
-      models: [
-        { id: 'gpt-4o', enabled: true },
-        { id: 'gpt-4o-mini', enabled: true },
-        { id: 'o1', enabled: true },
-        { id: 'o3-mini', enabled: true },
-      ],
+      models: DEFAULT_OPENAI_MODELS.map(id => ({ id, enabled: true })),
       enabled: true,
       createdAt: now,
       updatedAt: now,

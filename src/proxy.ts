@@ -177,15 +177,22 @@ export async function testModelConnection(
     }
 
     let lastResponse: Response | null = null
+    const isReasoning = /^o[1-9]/i.test(modelId)
+    const testPayload: Record<string, unknown> = {
+      model: modelId,
+      messages: [{ role: 'user', content: 'hi' }],
+    }
+    if (isReasoning) {
+      testPayload.max_completion_tokens = 10
+    } else {
+      testPayload.max_tokens = 1
+    }
+
     for (let i = 0; i < urls.length; i++) {
       const response = await fetch(urls[i], {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          model: modelId,
-          messages: [{ role: 'user', content: 'hi' }],
-          max_tokens: 1,
-        }),
+        body: JSON.stringify(testPayload),
         signal: AbortSignal.timeout(15000),
       })
 

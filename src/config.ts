@@ -44,6 +44,51 @@ export const OPENAI_OAUTH_CONFIG = {
   SESSION_TTL: 15 * 60, // 15 分钟临时会话
 }
 
+// 默认最新 OpenAI 与各平台预设模型列表
+export const DEFAULT_OPENAI_MODELS: string[] = [
+  'gpt-4o',
+  'gpt-4o-mini',
+  'o3-mini',
+  'o1',
+  'o1-mini',
+  'o1-preview',
+  'chatgpt-4o-latest',
+  'gpt-4.5-preview',
+  'gpt-4-turbo',
+  'gpt-4',
+  'gpt-3.5-turbo',
+  'dall-e-3',
+  'text-embedding-3-small',
+  'text-embedding-3-large',
+  'whisper-1',
+  'tts-1',
+]
+
+export const DEFAULT_PROVIDER_MODELS: Record<string, string[]> = {
+  openai: DEFAULT_OPENAI_MODELS,
+  'openai-oauth': DEFAULT_OPENAI_MODELS,
+  deepseek: [
+    'deepseek-chat',
+    'deepseek-reasoner',
+    'deepseek-v3',
+    'deepseek-r1',
+  ],
+  anthropic: [
+    'claude-3-7-sonnet-20250219',
+    'claude-3-5-sonnet-20241022',
+    'claude-3-5-haiku-20241022',
+    'claude-3-opus-20240229',
+  ],
+  gemini: [
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-pro',
+    'gemini-1.5-flash',
+  ],
+}
+
 // 有效期选项（秒）
 export const EXPIRY_OPTIONS: Record<string, number | null> = {
   '30d': 30 * 24 * 60 * 60,
