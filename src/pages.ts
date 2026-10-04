@@ -314,13 +314,26 @@ export async function renderAdminPage(c: Context<{ Bindings: Env }>) {
 
       <!-- Tab 2: 直接导入 Token -->
       <div id="${prefix}-pane-token" class="oauth-tab-pane hd">
-        <div style="font-size:0.73rem;color:var(--text-muted);margin-bottom:8px;">
-          已有 ChatGPT Access Token 或 Refresh Token，可直接粘贴保存：
+        <div style="font-size:0.73rem;color:var(--text-muted);margin-bottom:8px;line-height:1.4;">
+          已有 ChatGPT 的 Access Token 或 Refresh Token，可直接粘贴保存。
         </div>
+
+        <!-- 详细获取说明与相关网站 -->
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:0.72rem;line-height:1.6;">
+          <div style="font-weight:600;color:var(--zinc-200);margin-bottom:4px;display:flex;align-items:center;gap:5px;">
+            <i class="fas fa-key" style="color:#10b981;"></i> 如何获取 ChatGPT Token？
+          </div>
+          <div style="color:var(--text-muted);">
+            <div><b>方法 1（官方网页 Session，极简推荐）：</b>浏览器登录 <a href="https://chatgpt.com" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline;">ChatGPT 网页版</a>，打开 <a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline;">chatgpt.com/api/auth/session</a>，复制 <code class="cd" style="font-size:0.7rem;">accessToken</code>（或直接复制页面整个 JSON 粘贴到下方，会自动提取）。</div>
+            <div style="margin-top:3px;"><b>方法 2（社区一键获取工具，含 Refresh Token）：</b>打开 <a href="https://token.oaifree.com" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline;">token.oaifree.com</a>，登录账号后一键复制 Access Token 与 Refresh Token（填写 Refresh Token 支持自动静默续期）。</div>
+            <div style="margin-top:3px;"><b>方法 3（Codex CLI 本地配置）：</b>本地已登录使用过 Codex CLI 的设备，可打开本地文件 <code class="cd" style="font-size:0.7rem;">~/.codex/config.json</code> 直接复制。</div>
+          </div>
+        </div>
+
         <div style="display:flex;flex-direction:column;gap:6px;">
-          <input type="text" id="${prefix}-token-access" placeholder="Access Token (以 eyJ... 开头的 JWT)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
+          <input type="text" id="${prefix}-token-access" placeholder="Access Token (以 eyJ... 开头，或直接粘贴 session JSON)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;" oninput="onOAuthTokenPaste('${prefix}')">
           <div style="display:flex;align-items:center;gap:6px;">
-            <input type="text" id="${prefix}-token-refresh" placeholder="Refresh Token (可选，提供则可在过期时自动静默刷新)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
+            <input type="text" id="${prefix}-token-refresh" placeholder="Refresh Token (可选，填写后可在过期时自动静默刷新)" class="fx1" style="font-size:0.75rem;min-height:30px;font-family:monospace;">
             <button type="button" class="btn btn-p btn-xs" id="${prefix}-token-btn" onclick="importOAuthToken('${providerId}','${prefix}')" style="white-space:nowrap;">
               <i class="fas fa-save"></i> 保存并绑定
             </button>
@@ -1600,12 +1613,44 @@ async function exchangeOAuthCode(providerId, prefix) {
   }
 }
 
+function onOAuthTokenPaste(prefix) {
+  var accessInp = document.getElementById(prefix + '-token-access')
+  var refreshInp = document.getElementById(prefix + '-token-refresh')
+  if (!accessInp) return
+  var val = accessInp.value.trim()
+  if (val.startsWith('{') && val.endsWith('}')) {
+    try {
+      var parsed = JSON.parse(val)
+      var acc = parsed.accessToken || parsed.access_token || parsed.token || ''
+      var ref = parsed.refreshToken || parsed.refresh_token || ''
+      if (acc) {
+        accessInp.value = acc
+        if (ref && refreshInp && !refreshInp.value) {
+          refreshInp.value = ref
+        }
+        toast('已自动从粘贴的 JSON 中提取 Access Token！', 'success')
+      }
+    } catch (e) {}
+  }
+}
+
 async function importOAuthToken(providerId, prefix) {
   var accessInp = document.getElementById(prefix + '-token-access')
   var refreshInp = document.getElementById(prefix + '-token-refresh')
   var btn = document.getElementById(prefix + '-token-btn')
   var access = accessInp ? accessInp.value.trim() : ''
   var refresh = refreshInp ? refreshInp.value.trim() : ''
+
+  if (access.startsWith('{') && access.endsWith('}')) {
+    try {
+      var parsed = JSON.parse(access)
+      var acc = parsed.accessToken || parsed.access_token || parsed.token || ''
+      var ref = parsed.refreshToken || parsed.refresh_token || ''
+      if (acc) access = acc
+      if (ref && !refresh) refresh = ref
+    } catch (e) {}
+  }
+
   if (!access && !refresh) {
     showOAuthMsg(prefix, '请至少填写 Access Token 或 Refresh Token', 'error')
     toast('请至少填写 Access Token 或 Refresh Token', 'error')

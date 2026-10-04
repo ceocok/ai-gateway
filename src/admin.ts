@@ -995,10 +995,20 @@ export async function handleOpenAIOAuthImportToken(c: Context<{ Bindings: Env }>
     clientId?: string
   })
 
-  const accessToken = (body.accessToken || '').trim()
-  const refreshToken = (body.refreshToken || '').trim()
+  let accessToken = (body.accessToken || '').trim()
+  let refreshToken = (body.refreshToken || '').trim()
   const providerId = body.providerId || 'openai'
   const clientId = body.clientId || OPENAI_OAUTH_CONFIG.CODEX_CLIENT_ID
+
+  if (accessToken.startsWith('{') && accessToken.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(accessToken)
+      const acc = parsed.accessToken || parsed.access_token || parsed.token
+      const ref = parsed.refreshToken || parsed.refresh_token
+      if (acc) accessToken = String(acc).trim()
+      if (ref && !refreshToken) refreshToken = String(ref).trim()
+    } catch {}
+  }
 
   if (!accessToken && !refreshToken) {
     return c.json<ApiResponse>({ success: false, message: '请至少提供 Access Token 或 Refresh Token' }, 400)
