@@ -941,6 +941,11 @@ function addMdlRow() {
   c.appendChild(d)
 }
 
+function closeInlineRes(btn) {
+  const p = btn.closest('.amdl-inline-res, .key-test-inline-res, .model-test-inline-res')
+  if (p) p.remove()
+}
+
 function testNewMdl(btn) {
   const row = btn.closest('.fc') || btn.parentElement
   const inp = row ? row.querySelector('.ami') : null
@@ -983,7 +988,7 @@ function testNewMdl(btn) {
       btn.innerHTML = '<i class="fas fa-check" style="color:#10b981;"></i>'
       btn.title = '连接成功 (HTTP ' + code + ')'
       if (resEl) {
-        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> 模型「' + escHtml(mid) + '」连接成功 (HTTP ' + code + ')</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="this.closest(\'.amdl-inline-res\').remove()"></i></div>'
+        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> 模型「' + escHtml(mid) + '」连接成功 (HTTP ' + code + ')</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="closeInlineRes(this)"></i></div>'
       }
       toast('模型「' + mid + '」连接成功 (HTTP ' + code + ')', 'success')
       if (tr) tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 模型「' + escHtml(mid) + '」连接成功 (HTTP ' + code + ')</div>'
@@ -991,7 +996,7 @@ function testNewMdl(btn) {
       btn.innerHTML = '<i class="fas fa-times" style="color:#ef4444;"></i>'
       btn.title = '测试失败'
       if (resEl) {
-        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> 模型「' + escHtml(mid) + '」测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="this.closest(\'.amdl-inline-res\').remove()"></i></div>'
+        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> 模型「' + escHtml(mid) + '」测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="closeInlineRes(this)"></i></div>'
       }
       toast('模型「' + mid + '」测试失败: ' + msg.substring(0, 50), 'error')
       if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + escHtml(msg) + '</div>'
@@ -1102,8 +1107,10 @@ function addKeyRow(id) {
   const d = document.createElement('div')
   d.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:rgba(9,9,11,0.4);border:1px solid rgba(63,63,70,0.3);margin-bottom:6px;'
   d.dataset.kidx = cnt
-  d.innerHTML = '<input type="text" value="' + k + '" class="fx1" id="k-' + id + '-' + cnt + '" placeholder="API Key" style="font-family:SF Mono,Fira Code,JetBrains Mono,monospace;font-size:0.78rem;"><label class="tg"><input type="checkbox" checked id="ken-' + id + '-' + cnt + '"><span class="sl"></span></label><button class="btn btn-gh btn-xs" onclick="testKeyRow(\\'' + id + '\\',' + cnt + ')" title="测试"><i class="fas fa-plug"></i></button><button class="btn btn-gh btn-xs" onclick="rmKeyRow(\\'' + id + '\\',' + cnt + ')"><i class="fas fa-times c-muted"></i></button>'
+  d.innerHTML = '<input type="text" value="' + escHtml(k) + '" class="fx1" id="k-' + id + '-' + cnt + '" placeholder="API Key" style="font-family:SF Mono,Fira Code,JetBrains Mono,monospace;font-size:0.78rem;"><label class="tg"><input type="checkbox" checked id="ken-' + id + '-' + cnt + '"><span class="sl"></span></label><button class="btn btn-gh btn-xs" id="tk-' + id + '-' + cnt + '" title="测试"><i class="fas fa-plug"></i></button><button class="btn btn-gh btn-xs" id="rk-' + id + '-' + cnt + '"><i class="fas fa-times c-muted"></i></button>'
   c.appendChild(d)
+  document.getElementById('tk-' + id + '-' + cnt).addEventListener('click', function() { testKeyRow(id, cnt) })
+  document.getElementById('rk-' + id + '-' + cnt).addEventListener('click', function() { rmKeyRow(id, cnt) })
   inp.value = ''
   inp.focus()
 }
@@ -1155,13 +1162,13 @@ async function testKeyRow(id, idx) {
 
     if (isSuccess) {
       if (resEl) {
-        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> Key 连接成功' + (code ? ' (HTTP ' + code + ')' : '') + '</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="this.closest(\'#kres-' + id + '-' + idx + '\').remove()"></i></div>'
+        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> Key 连接成功' + (code ? ' (HTTP ' + code + ')' : '') + '</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="closeInlineRes(this)"></i></div>'
       }
       toast('Key 连接成功 (HTTP ' + code + ')', 'success')
       if (tr) tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> Key 连接成功 (HTTP ' + code + ')</div>'
     } else {
       if (resEl) {
-        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> Key 测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="this.closest(\'#kres-' + id + '-' + idx + '\').remove()"></i></div>'
+        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> Key 测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="closeInlineRes(this)"></i></div>'
       }
       toast('Key 测试失败: ' + msg.substring(0, 50), 'error')
       if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + escHtml(msg) + '</div>'
@@ -1392,7 +1399,7 @@ async function clearAllModels(id) {
     toast('当前列表中没有模型', 'info')
     return
   }
-  if (!(await cM('确定要清空已添加的全部 ' + rows.length + ' 个模型吗？\n（需点击下方「保存」后正式生效）'))) return
+  if (!(await cM('确定要清空已添加的全部 ' + rows.length + ' 个模型吗？（需点击下方「保存」后正式生效）'))) return
   c.innerHTML = ''
   document.querySelectorAll('[id^="mres-' + id + '-"]').forEach(function(el) { el.remove() })
   const mp = document.getElementById('mp-' + id)
@@ -1449,7 +1456,7 @@ async function testMdl(id, mid, idx) {
         btn.title = '连接成功 (HTTP ' + (code || 200) + ')'
       }
       if (resEl) {
-        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> 模型「' + escHtml(targetMid) + '」连接成功' + (code ? ' (HTTP ' + code + ')' : '') + '</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="this.closest(\'#mres-' + id + '-' + idx + '\').remove()"></i></div>'
+        resEl.innerHTML = '<div class="al al-s" style="margin:2px 0 6px 0;padding:5px 8px;font-size:0.73rem;display:flex;align-items:center;justify-content:space-between;"><span style="display:flex;align-items:center;gap:6px;"><i class="fas fa-check-circle"></i> 模型「' + escHtml(targetMid) + '」连接成功' + (code ? ' (HTTP ' + code + ')' : '') + '</span><i class="fas fa-times cp c-muted" style="cursor:pointer;" onclick="closeInlineRes(this)"></i></div>'
       }
       toast('模型「' + targetMid + '」连接成功 (HTTP ' + (code || 200) + ')', 'success')
       if (tr) tr.innerHTML = '<div class="al al-s"><i class="fas fa-check-circle"></i> 模型「' + escHtml(targetMid) + '」连接成功 (HTTP ' + (code || 200) + ')</div>'
@@ -1459,7 +1466,7 @@ async function testMdl(id, mid, idx) {
         btn.title = '测试失败'
       }
       if (resEl) {
-        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> 模型「' + escHtml(targetMid) + '」测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="this.closest(\'#mres-' + id + '-' + idx + '\').remove()"></i></div>'
+        resEl.innerHTML = '<div class="al al-e" style="margin:2px 0 6px 0;padding:6px 10px;font-size:0.73rem;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;line-height:1.45;"><div><div style="font-weight:600;margin-bottom:2px;"><i class="fas fa-times-circle"></i> 模型「' + escHtml(targetMid) + '」测试失败' + (code ? ' (HTTP ' + code + ')' : '') + '</div><div style="word-break:break-all;color:var(--zinc-300);">' + escHtml(msg) + '</div></div><i class="fas fa-times cp c-muted" style="cursor:pointer;flex-shrink:0;margin-top:2px;" onclick="closeInlineRes(this)"></i></div>'
       }
       toast('模型「' + targetMid + '」测试失败: ' + msg.substring(0, 50), 'error')
       if (tr) tr.innerHTML = '<div class="al al-e"><i class="fas fa-times-circle"></i> ' + escHtml(msg) + '</div>'
