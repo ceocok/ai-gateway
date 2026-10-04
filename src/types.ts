@@ -139,4 +139,5 @@ export interface Env {
   OAUTH_ENCRYPTION_KEY?: string
   OPENAI_OAUTH_CLIENT_ID?: string
   OPENAI_OAUTH_CLIENT_SECRET?: string
+  OPENAI_OAUTH_TOKEN_URL?: string
 }

@@ -941,7 +941,7 @@ export async function handleOpenAIOAuthExchange(c: Context<{ Bindings: Env }>) {
       code,
       redirectUri,
       codeVerifier,
-      tokenUrl: OPENAI_OAUTH_CONFIG.CODEX_TOKEN_URL,
+      tokenUrl: c.env.OPENAI_OAUTH_TOKEN_URL || OPENAI_OAUTH_CONFIG.CODEX_TOKEN_URL,
     })
 
     if (!tokenData.access_token) {
@@ -966,9 +966,17 @@ export async function handleOpenAIOAuthExchange(c: Context<{ Bindings: Env }>) {
     const errorMsg = (err && typeof err === 'object' && err.message)
       ? String(err.message)
       : (typeof err === 'string' ? err : '令牌兑换失败')
+
+    let userMsg = errorMsg
+    if (errorMsg.includes('Country, region, or territory not supported') || errorMsg.includes('unsupported_country')) {
+      userMsg = 'OpenAI 提示所在区域受限（Cloudflare 边缘节点或访问网络位于非直通地区，如香港/国内直连）。请切换美区/台区/日区等支持地区的科学代理节点后再点击兑换，或使用「直接填 Token」选项直接导入。'
+    } else if (errorMsg.includes('token_expired') || errorMsg.includes('Could not validate your token')) {
+      userMsg = 'OpenAI 授权码已过期或已被使用，请在后台点击「1. 打开 OpenAI 授权窗口」重新授权获取最新链接后再粘贴兑换。'
+    }
+
     return c.json<ApiResponse>({
       success: false,
-      message: errorMsg,
+      message: userMsg,
     }, 400)
   }
 }
