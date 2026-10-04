@@ -1946,6 +1946,23 @@ function extractTokensFromJson(obj) {
   return { acc: acc, ref: ref }
 }
 
+function checkJwtExpiry(token) {
+  try {
+    var parts = token.split('.')
+    if (parts.length >= 2) {
+      var b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+      while (b64.length % 4 !== 0) b64 += '='
+      var payload = JSON.parse(atob(b64))
+      if (typeof payload.exp === 'number' && payload.exp > 0) {
+        if (Date.now() >= payload.exp * 1000) {
+          return { expired: true, expDate: new Date(payload.exp * 1000) }
+        }
+      }
+    }
+  } catch (e) {}
+  return { expired: false }
+}
+
 function onOAuthTokenPaste(prefix) {
   var accessInp = document.getElementById(prefix + '-token-access')
   var refreshInp = document.getElementById(prefix + '-token-refresh')
@@ -1964,6 +1981,12 @@ function onOAuthTokenPaste(prefix) {
       }
     } catch (e) {}
   }
+  if (accessInp.value) {
+    var check = checkJwtExpiry(accessInp.value)
+    if (check.expired) {
+      showOAuthMsg(prefix, '注意：当前粘贴的 Access Token 已于 ' + check.expDate.toLocaleString() + ' 过期。若无有效 Refresh Token 将无法请求，请重新在 ChatGPT 网页端获取最新 Token！', 'error')
+    }
+  }
 }
 
 async function importOAuthToken(providerId, prefix) {
@@ -1980,6 +2003,14 @@ async function importOAuthToken(providerId, prefix) {
       if (extracted.acc) access = extracted.acc
       if (extracted.ref && !refresh) refresh = extracted.ref
     } catch (e) {}
+  }
+
+  if (refresh.startsWith('{') && refresh.endsWith('}')) {
+    try {
+      var parsedRef = JSON.parse(refresh)
+      var extractedRef = extractTokensFromJson(parsedRef)
+      refresh = extractedRef.ref || ''
+    } catch (e) { refresh = '' }
   }
 
   if (!access && !refresh) {

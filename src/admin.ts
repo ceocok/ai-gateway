@@ -44,6 +44,7 @@ import {
   decryptSecret,
   parseJwtPayload,
   parseOAuthResponseError,
+  refreshOpenAIToken,
   resolveProviderKeyToken,
 } from './oauth'
 
@@ -385,6 +386,27 @@ export async function handleProbeProvider(c: Context<{ Bindings: Env }>) {
     result = await fetchProviderModels(baseUrl, testKey, apiType, extraHeaders, c.env)
   }
 
+  if (result.statusCode === 401 && isOAuth && provider) {
+    const keyEntry = provider.apiKeys.find(k => k.type === 'openai-oauth')
+    if (keyEntry?.refreshToken) {
+      const refreshed = await refreshOpenAIToken(c.env, provider.id, keyEntry)
+      if (refreshed) {
+        const resolved = await resolveProviderKeyToken(c.env, provider.id, refreshed)
+        if (resolved) {
+          testKey = resolved.token
+          if (resolved.chatgptAccountId) {
+            extraHeaders = { 'ChatGPT-Account-Id': resolved.chatgptAccountId }
+          }
+          if (body.modelId) {
+            result = await testModelConnection(baseUrl, testKey, body.modelId, apiType, extraHeaders, c.env)
+          } else {
+            result = await fetchProviderModels(baseUrl, testKey, apiType, extraHeaders, c.env)
+          }
+        }
+      }
+    }
+  }
+
   // 如果是 OpenAI OAuth 探测模型，尝试使用真实 token 访问 /v1/models；
   // 如果上游返回 401/403/失败或模型列表为空（ChatGPT 账户通常没有 developer /v1/models 权限），
   // 自动回退为官方全量最新模型列表并提示
@@ -448,7 +470,25 @@ export async function handleTestModel(c: Context<{ Bindings: Env }>) {
     }
   }
 
-  const result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType, extraHeaders, c.env)
+  let result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType, extraHeaders, c.env)
+
+  // 如果测试返回 401 且为 OAuth 账号且配置了 refresh_token，尝试刷新一次并重新测试
+  if (result.statusCode === 401 && (apiKeyEntry.type === 'openai-oauth' || provider.apiType === 'openai-oauth') && apiKeyEntry.refreshToken) {
+    const refreshed = await refreshOpenAIToken(c.env, provider.id, apiKeyEntry)
+    if (refreshed) {
+      const resolved = await resolveProviderKeyToken(c.env, provider.id, refreshed)
+      if (resolved) {
+        apiKey = resolved.token
+        if (resolved.chatgptAccountId) {
+          extraHeaders = { 'ChatGPT-Account-Id': resolved.chatgptAccountId }
+        }
+        result = await testModelConnection(provider.baseUrl, apiKey, modelId, provider.apiType, extraHeaders, c.env)
+        if (result.success) {
+          result.message = `${result.message} (令牌已自动续期)`
+        }
+      }
+    }
+  }
 
   return c.json<ApiResponse>({
     success: true,
@@ -840,7 +880,12 @@ export async function bindOpenAITokenToProvider(
     ''
 
   const expiresIn = tokenData.expires_in || 3600
-  const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
+  let expiresAt: string
+  if (typeof payload.exp === 'number' && payload.exp > 0) {
+    expiresAt = new Date(payload.exp * 1000).toISOString()
+  } else {
+    expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
+  }
   const encryptedAccessToken = await encryptSecret(tokenData.access_token, secret)
   const encryptedRefreshToken = tokenData.refresh_token
     ? await encryptSecret(tokenData.refresh_token, secret)
@@ -1126,6 +1171,27 @@ export async function handleOpenAIOAuthImportToken(c: Context<{ Bindings: Env }>
     } catch {}
   }
 
+  if (refreshToken.startsWith('{') && refreshToken.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(refreshToken)
+      let ref = parsed.refreshToken || parsed.refresh_token || ''
+      if (!ref && typeof parsed === 'object') {
+        for (const k of Object.keys(parsed)) {
+          if (parsed[k] && typeof parsed[k] === 'object') {
+            const sub = parsed[k]
+            if (sub.refreshToken || sub.refresh_token) {
+              ref = sub.refreshToken || sub.refresh_token
+              break
+            }
+          }
+        }
+      }
+      refreshToken = ref ? String(ref).trim() : ''
+    } catch {
+      refreshToken = ''
+    }
+  }
+
   if (!accessToken && !refreshToken) {
     return c.json<ApiResponse>({ success: false, message: '请至少提供 Access Token 或 Refresh Token' }, 400)
   }
@@ -1134,7 +1200,20 @@ export async function handleOpenAIOAuthImportToken(c: Context<{ Bindings: Env }>
   let finalRefresh = refreshToken
   let expiresIn = 3600
 
-  if (!finalAccess && finalRefresh) {
+  // 检查 finalAccess 中的真实 JWT exp
+  let accessIsExpired = false
+  let expDateStr = ''
+  if (finalAccess) {
+    const payload = parseJwtPayload(finalAccess)
+    if (typeof payload.exp === 'number' && payload.exp > 0) {
+      if (Date.now() >= payload.exp * 1000) {
+        accessIsExpired = true
+        expDateStr = new Date(payload.exp * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+      }
+    }
+  }
+
+  if ((!finalAccess || accessIsExpired) && finalRefresh) {
     try {
       const form = new URLSearchParams()
       form.set('grant_type', 'refresh_token')
@@ -1168,13 +1247,24 @@ export async function handleOpenAIOAuthImportToken(c: Context<{ Bindings: Env }>
         finalAccess = d.access_token
         if (d.refresh_token) finalRefresh = d.refresh_token
         if (d.expires_in) expiresIn = d.expires_in
+        accessIsExpired = false
       } else {
         const errMsg = await parseOAuthResponseError(resp, '刷新令牌失败')
-        return c.json<ApiResponse>({ success: false, message: `使用 Refresh Token 获取访问令牌失败: ${errMsg}` }, 400)
+        return c.json<ApiResponse>({
+          success: false,
+          message: accessIsExpired
+            ? `导入失败：填写的 Access Token 已于 ${expDateStr} 过期，且尝试使用 Refresh Token 刷新失败 (${errMsg})。请前往 chatgpt.com 重新登录并获取最新 Token，或在「ChatGPT 授权」标签页进行官方授权。`
+            : `使用 Refresh Token 获取访问令牌失败: ${errMsg}`
+        }, 400)
       }
     } catch (e: any) {
       return c.json<ApiResponse>({ success: false, message: e.message || '请求 OpenAI 令牌服务失败' }, 400)
     }
+  } else if (accessIsExpired && !finalRefresh) {
+    return c.json<ApiResponse>({
+      success: false,
+      message: `导入失败：填写的 Access Token 已于 ${expDateStr} 过期。由于未提供有效的 Refresh Token，无法自动续期。请打开 https://chatgpt.com/api/auth/session 重新登录并复制最新的 Access Token，或使用第一个标签页「ChatGPT 授权」进行官方 OAuth 授权。`
+    }, 400)
   }
 
   try {

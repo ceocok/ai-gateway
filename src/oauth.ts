@@ -358,6 +358,21 @@ export async function resolveProviderKeyToken(
     needsRefresh = true
   }
 
+  // 进一步检查 accessToken 内真实的 JWT exp（防止外部录入错误的 expiresAt）
+  if (!needsRefresh && entry.accessToken) {
+    try {
+      const dec = await decryptSecret(entry.accessToken, secret).catch(() => entry.accessToken)
+      if (dec) {
+        const payload = parseJwtPayload(dec)
+        if (typeof payload.exp === 'number' && payload.exp > 0) {
+          if (Date.now() >= payload.exp * 1000 - 120000) {
+            needsRefresh = true
+          }
+        }
+      }
+    } catch {}
+  }
+
   if (needsRefresh && entry.refreshToken) {
     const refreshed = await refreshOpenAIToken(env, providerId, entry)
     if (refreshed) entry = refreshed
