@@ -846,7 +846,7 @@ function renderDiscoveredModels(models) {
   const list = document.getElementById('amcl')
   const uniqueModels = Array.from(new Set(models.filter(function(model) {
     return typeof model === 'string' && model.trim()
-  }))).sort()
+  })))
 
   list.innerHTML = ''
   if (uniqueModels.length === 0) {
@@ -1110,7 +1110,7 @@ function renderEditDiscoveredModels(id, models) {
   const existing = new Set(getMdl(id).map(function(model) { return model.id }))
   const uniqueModels = Array.from(new Set(models.filter(function(model) {
     return typeof model === 'string' && model.trim()
-  }))).sort()
+  })))
 
   panel.dataset.models = JSON.stringify(uniqueModels)
   panel.innerHTML = ''

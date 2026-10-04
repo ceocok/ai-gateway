@@ -127,6 +127,9 @@ async function fetchProviderModels(
   }
 
   const urls = buildEndpointUrls(baseUrl, 'models')
+  if (apiType === 'openai-oauth' || baseUrl.includes('openai.com')) {
+    urls.push('https://chatgpt.com/backend-api/models')
+  }
   let lastResponse: Response | null = null
 
   try {
@@ -143,7 +146,7 @@ async function fetchProviderModels(
       }
 
       lastResponse = response
-      break
+      if (response.ok) break
     }
   } catch (err) {
     const error = err as Error
@@ -164,10 +167,19 @@ async function fetchProviderModels(
     }
   }
 
-  const data = await response.json().catch(() => null) as { data?: Array<{ id?: string }> } | null
-  const models = Array.isArray(data?.data)
-    ? data.data.map(m => m.id).filter((id): id is string => !!id)
-    : []
+  const rawData = await response.json().catch(() => null) as any
+  let models: string[] = []
+  if (Array.isArray(rawData?.data)) {
+    models = rawData.data.map((m: any) => m.id || m.slug).filter((id: any): id is string => !!id)
+  } else if (Array.isArray(rawData?.models)) {
+    models = rawData.models.map((m: any) => m.slug || m.id).filter((id: any): id is string => !!id)
+  } else if (Array.isArray(rawData?.categories)) {
+    for (const cat of rawData.categories) {
+      if (Array.isArray(cat.models)) {
+        models.push(...cat.models.map((m: any) => m.slug || m.id).filter((id: any): id is string => !!id))
+      }
+    }
+  }
 
   return {
     success: true,

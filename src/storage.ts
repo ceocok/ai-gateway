@@ -1,4 +1,4 @@
-import { KV_KEYS } from './config'
+import { KV_KEYS, DEFAULT_OPENAI_MODELS } from './config'
 import type { ApiKeyEntry, CallStatusRecord, Env, OpenAIOAuthSession, Provider, ProviderHealth, ProxyKey, Session } from './types'
 
 const CALL_STATUS_LIMIT = 30
@@ -26,6 +26,27 @@ export async function getProviders(env: Env): Promise<Provider[]> {
   }
   const data = await env.KV.get(KV_KEYS.PROVIDERS)
   const parsed: Provider[] = data ? JSON.parse(data) : []
+
+  // 自动将仅包含旧版 4 个模型的 OpenAI 提供商升级为包含 GPT-6 / GPT-5.6 系列的最新模型列表
+  let migrated = false
+  for (const p of parsed) {
+    if (
+      (p.id === 'openai' || p.apiType === 'openai-oauth') &&
+      p.models.length <= 4 &&
+      p.models.every((m) => ['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini'].includes(m.id))
+    ) {
+      const existingMap = new Map(p.models.map((m) => [m.id, m.enabled]))
+      p.models = DEFAULT_OPENAI_MODELS.map((id) => ({
+        id,
+        enabled: existingMap.has(id) ? (existingMap.get(id) ?? true) : true,
+      }))
+      migrated = true
+    }
+  }
+  if (migrated) {
+    await env.KV.put(KV_KEYS.PROVIDERS, JSON.stringify(parsed))
+  }
+
   providersCache = parsed
   providersCacheTime = Date.now()
   return parsed
