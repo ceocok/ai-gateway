@@ -245,7 +245,7 @@ export async function testModelConnection(
     if (response?.status === 401 && /token is expired|expired/i.test(errorBody)) {
       friendlyMessage = 'HTTP 401: OpenAI 访问令牌已过期。请在编辑窗口点击「打开 OpenAI 授权窗口」重新授权或在「直接填 Token」中粘贴最新 Token（建议包含 refresh_token 以实现自动静默续期）。'
     } else if (response?.status === 403 && isOpenAIGeoBlocked(403, errorBody)) {
-      friendlyMessage = 'HTTP 403: 上游提示地区受限。建议将提供商 API 地址设置为台湾反向代理（https://tw1.vpsnat.com/v1）。'
+      friendlyMessage = 'HTTP 403: 上游提示地区受限 (Country, region, or territory not supported)。'
     }
 
     return {

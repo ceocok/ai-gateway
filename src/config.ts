@@ -44,9 +44,8 @@ export const OPENAI_OAUTH_CONFIG = {
   SESSION_TTL: 15 * 60, // 15 分钟临时会话
 }
 
-// 台湾反向代理（用于直通 OpenAI，规避香港等 Cloudflare 边缘节点遭遇 403 地区限制）
-export const OPENAI_PROXY_BASE_URL = 'https://tw1.vpsnat.com/v1'
-export const OPENAI_PROXY_TOKEN_URL = 'https://tw1.vpsnat.com/oauth/token'
+export const OPENAI_PROXY_BASE_URL = 'https://api.openai.com/v1'
+export const OPENAI_PROXY_TOKEN_URL = 'https://auth.openai.com/oauth/token'
 
 /** 检测是否为 OpenAI 区域限制报错 (HTTP 403 Country, region, or territory not supported) */
 export function isOpenAIGeoBlocked(status: number, errorText: string): boolean {

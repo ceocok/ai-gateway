@@ -1804,10 +1804,6 @@ function onAfmtChange(val) {
     if (val === 'openai-oauth') box.classList.remove('hd')
     else box.classList.add('hd')
   }
-  var urlInp = document.getElementById('aurl')
-  if (urlInp && (!urlInp.value || urlInp.value.includes('api.openai.com'))) {
-    if (val === 'openai-oauth') urlInp.value = 'https://tw1.vpsnat.com/v1'
-  }
 }
 
 function onEditFmtChange(id, val) {
@@ -1815,10 +1811,6 @@ function onEditFmtChange(id, val) {
   if (box) {
     if (val === 'openai-oauth') box.classList.remove('hd')
     else box.classList.add('hd')
-  }
-  var urlInp = document.getElementById('url-' + id)
-  if (urlInp && (!urlInp.value || urlInp.value === 'https://api.openai.com/v1')) {
-    if (val === 'openai-oauth') urlInp.value = 'https://tw1.vpsnat.com/v1'
   }
 }
 
