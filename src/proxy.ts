@@ -149,16 +149,26 @@ export function normalizeProviderApiKey(apiKey: string): string {
   return apiKey.trim().replace(/^Bearer\s+/i, '')
 }
 
+export function isHtmlResponse(response: Response): boolean {
+  const ct = response.headers.get('content-type')?.toLowerCase() || ''
+  return ct.includes('text/html')
+}
+
 export function buildEndpointUrls(baseUrl: string, subPath: string, search = ''): string[] {
   const cleanBase = baseUrl.replace(/\/$/, '')
   const cleanSubPath = subPath.replace(/^\//, '')
-  const urls = [`${cleanBase}/${cleanSubPath}${search}`]
 
-  if (!/\/v1$/i.test(cleanBase)) {
-    urls.push(`${cleanBase}/v1/${cleanSubPath}${search}`)
+  if (/\/v1$/i.test(cleanBase)) {
+    return [`${cleanBase}/${cleanSubPath}${search}`]
   }
 
-  return urls
+  // 关键修复：当提供商 Base URL 未以 /v1 结尾时，几乎所有 OpenAI/LLM API 规范路径都在 /v1/* 下
+  // 必须优先尝试 /v1/ 路径！否则若优先尝试非 v1 路径，极易命中提供商站点的前端 SPA / 登录页
+  // （例如 Next.js 会对未知路由返回 HTTP 200 text/html），导致 API 被前端 HTML 拦截。
+  return [
+    `${cleanBase}/v1/${cleanSubPath}${search}`,
+    `${cleanBase}/${cleanSubPath}${search}`,
+  ]
 }
 
 /** 测试模型连接，发送最小请求验证 */
@@ -237,18 +247,26 @@ export async function testModelConnection(
         }
       }
 
-      if (response.status === 404 && i < urls.length - 1) {
+      const isHtml = isHtmlResponse(response)
+      if ((response.status === 404 || isHtml) && i < urls.length - 1) {
         lastResponse = response
         continue
       }
 
       lastResponse = response
-      break
+      if (response.ok && !isHtml) break
     }
 
     const response = lastResponse
 
     if (response?.ok) {
+      if (isHtmlResponse(response)) {
+        return {
+          success: false,
+          message: '上游返回了 HTML 网页而非合法 API 数据，请检查提供商 Base URL 是否挂载在 /v1 路径',
+          statusCode: response.status,
+        }
+      }
       return { success: true, message: '连接成功', statusCode: response.status }
     }
 
@@ -476,13 +494,14 @@ async function tryProvider(
           }
         }
 
-        if (current.status === 404 && i < forwardUrls.length - 1) {
+        const isHtml = isHtmlResponse(current)
+        if ((current.status === 404 || isHtml) && i < forwardUrls.length - 1) {
           response = current
           continue
         }
 
         response = current
-        break
+        if (current.ok && !isHtml) break
       }
 
       if (!response) {
@@ -525,18 +544,25 @@ async function tryProvider(
                   }
                 }
               }
-              if (retryCurrent.status === 404 && i < forwardUrls.length - 1) {
+              const isHtml = isHtmlResponse(retryCurrent)
+              if ((retryCurrent.status === 404 || isHtml) && i < forwardUrls.length - 1) {
                 response = retryCurrent
                 continue
               }
               response = retryCurrent
-              break
+              if (retryCurrent.ok && !isHtml) break
             }
           }
         }
       }
 
       if (response.ok) {
+        if (isHtmlResponse(response)) {
+          // 上游返回了 HTML 网页而非 API 数据，不视为有效响应，尝试下一个 Key 或候选提供商
+          await finishCall('error', 502, `上游 ${provider.name} 返回了 HTML 网页而非有效 API 响应`)
+          continue
+        }
+
         if (healthData[apiKey]?.failures > 0) {
           delete healthData[apiKey]
           healthUpdated = true

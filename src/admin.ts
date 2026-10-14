@@ -20,7 +20,7 @@ import {
   getOpenAIOAuthSession,
   deleteOpenAIOAuthSession,
 } from './storage'
-import { buildEndpointUrls, normalizeProviderApiKey, testModelConnection } from './proxy'
+import { buildEndpointUrls, normalizeProviderApiKey, testModelConnection, isHtmlResponse } from './proxy'
 import {
   PROXY_KEY_PREFIX,
   EXPIRY_OPTIONS,
@@ -177,13 +177,14 @@ async function fetchProviderModels(
         }
       }
 
-      if (response.status === 404 && i < urls.length - 1) {
+      const isHtml = isHtmlResponse(response)
+      if ((response.status === 404 || isHtml) && i < urls.length - 1) {
         lastResponse = response
         continue
       }
 
       lastResponse = response
-      if (response.ok) break
+      if (response.ok && !isHtml) break
     }
   } catch (err) {
     const error = err as Error
@@ -193,6 +194,13 @@ async function fetchProviderModels(
   const response = lastResponse
   if (!response) {
     return { success: false, message: '无响应' }
+  }
+
+  if (response.ok && isHtmlResponse(response)) {
+    return {
+      success: false,
+      message: '上游返回了 HTML 网页而非合法模型列表，请确认 Base URL 是否挂载在 /v1 路径',
+    }
   }
 
   if (!response.ok) {
