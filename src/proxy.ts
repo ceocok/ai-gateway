@@ -30,16 +30,20 @@ async function readHealth(env: Env, providerId: string): Promise<HealthMap> {
 }
 
 async function writeHealth(env: Env, providerId: string, health: HealthMap): Promise<void> {
-  // 只保存有失败记录的 key，避免 KV 膨胀
-  const filtered: HealthMap = {}
-  for (const [k, v] of Object.entries(health)) {
-    if (v.failures > 0) filtered[k] = v
-  }
-  if (Object.keys(filtered).length > 0) {
-    await env.KV.put(HEALTH_KEY(providerId), JSON.stringify(filtered))
-  } else {
-    // 全部健康，删除 KV 条目
-    await env.KV.delete(HEALTH_KEY(providerId)).catch(() => {})
+  try {
+    // 只保存有失败记录的 key，避免 KV 膨胀
+    const filtered: HealthMap = {}
+    for (const [k, v] of Object.entries(health)) {
+      if (v.failures > 0) filtered[k] = v
+    }
+    if (Object.keys(filtered).length > 0) {
+      await env.KV.put(HEALTH_KEY(providerId), JSON.stringify(filtered)).catch(() => {})
+    } else {
+      // 全部健康，删除 KV 条目
+      await env.KV.delete(HEALTH_KEY(providerId)).catch(() => {})
+    }
+  } catch (err: any) {
+    console.warn(`[writeHealth skipped]`, err?.message || err)
   }
 }
 

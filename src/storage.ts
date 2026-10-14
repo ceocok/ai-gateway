@@ -18,6 +18,25 @@ function cacheValid(cacheTime: number): boolean {
   return Date.now() - cacheTime < CACHE_TTL_MS
 }
 
+/**
+ * 安全写入 KV，捕获配额超出（KV put() limit exceeded for the day）等异常，
+ * 避免因免费版 1000 次/天写配额耗尽而直接导致核心业务报 500 崩溃。
+ */
+export async function safeKvPut(
+  kv: KVNamespace,
+  key: string,
+  value: string,
+  options?: KVNamespacePutOptions
+): Promise<boolean> {
+  try {
+    await kv.put(key, value, options)
+    return true
+  } catch (err: any) {
+    console.warn(`[KV.put skipped] Key: ${key}, Error:`, err?.message || err)
+    return false
+  }
+}
+
 // ===== 提供商 CRUD =====
 
 export async function getProviders(env: Env): Promise<Provider[]> {
@@ -44,7 +63,7 @@ export async function getProviders(env: Env): Promise<Provider[]> {
     }
   }
   if (migrated) {
-    await env.KV.put(KV_KEYS.PROVIDERS, JSON.stringify(parsed))
+    await safeKvPut(env.KV, KV_KEYS.PROVIDERS, JSON.stringify(parsed))
   }
 
   providersCache = parsed
@@ -58,7 +77,7 @@ export async function getProvider(env: Env, id: string): Promise<Provider | null
 }
 
 export async function setProviders(env: Env, providers: Provider[]): Promise<void> {
-  await env.KV.put(KV_KEYS.PROVIDERS, JSON.stringify(providers))
+  await safeKvPut(env.KV, KV_KEYS.PROVIDERS, JSON.stringify(providers))
   providersCache = providers
   providersCacheTime = Date.now()
 }
@@ -133,7 +152,7 @@ export async function getAllProviderHealth(env: Env): Promise<Record<string, Pro
 }
 
 export async function setProviderHealth(env: Env, providerId: string, health: ProviderHealth): Promise<void> {
-  await env.KV.put(KV_KEYS.PROVIDER_HEALTH_PREFIX + providerId, JSON.stringify(health))
+  await safeKvPut(env.KV, KV_KEYS.PROVIDER_HEALTH_PREFIX + providerId, JSON.stringify(health))
 }
 
 export async function clearProviderHealth(env: Env, providerId: string): Promise<void> {
@@ -146,22 +165,26 @@ export async function clearProviderKeyHealth(env: Env, providerId: string): Prom
 }
 
 export async function autoPauseProvider(env: Env, providerId: string, error: string): Promise<void> {
-  const provider = await getProvider(env, providerId)
-  if (!provider || !provider.enabled) return
+  try {
+    const provider = await getProvider(env, providerId)
+    if (!provider || !provider.enabled) return
 
-  // 更新 provider enabled = false
-  await updateProvider(env, providerId, { enabled: false })
+    // 更新 provider enabled = false
+    await updateProvider(env, providerId, { enabled: false })
 
-  // 写入健康记录
-  const health: ProviderHealth = {
-    autoPaused: true,
-    autoPausedAt: new Date().toISOString(),
-    lastError: error,
-    lastErrorAt: new Date().toISOString(),
-    demotedKeys: 0,
-    keyStats: { total: 0, healthy: 0, demoted: 0 },
+    // 写入健康记录
+    const health: ProviderHealth = {
+      autoPaused: true,
+      autoPausedAt: new Date().toISOString(),
+      lastError: error,
+      lastErrorAt: new Date().toISOString(),
+      demotedKeys: 0,
+      keyStats: { total: 0, healthy: 0, demoted: 0 },
+    }
+    await setProviderHealth(env, providerId, health)
+  } catch (err: any) {
+    console.warn(`[autoPauseProvider] Failed:`, err?.message || err)
   }
-  await setProviderHealth(env, providerId, health)
 }
 
 export async function recoverProvider(env: Env, providerId: string): Promise<boolean> {
@@ -183,17 +206,32 @@ function callStatusKey(id: string): string {
   return KV_KEYS.CALL_STATUS_PREFIX + id
 }
 
-export async function recordCallStart(env: Env, record: CallStatusRecord): Promise<void> {
-  await env.KV.put(callStatusKey(record.id), JSON.stringify(record), {
-    expirationTtl: CALL_STATUS_TTL_SECONDS,
-  })
+// 内存中维护最近调用状态（0 耗费 KV 写配额，毫秒级响应，保护免费版每天 1000 次 KV 写配额不被批量巡查耗尽）
+const memoryCallStatusMap = new Map<string, CallStatusRecord>()
+const memoryRecentCallIds: string[] = []
 
-  const raw = await env.KV.get(KV_KEYS.CALL_STATUS_RECENT)
-  const ids = raw ? JSON.parse(raw) as string[] : []
-  const next = [record.id, ...ids.filter(id => id !== record.id)].slice(0, CALL_STATUS_LIMIT)
-  await env.KV.put(KV_KEYS.CALL_STATUS_RECENT, JSON.stringify(next), {
-    expirationTtl: CALL_STATUS_TTL_SECONDS,
-  })
+export async function recordCallStart(env: Env, record: CallStatusRecord): Promise<void> {
+  // 1. 始终优先保存在 Worker 内存中
+  memoryCallStatusMap.set(record.id, record)
+  const existingIdx = memoryRecentCallIds.indexOf(record.id)
+  if (existingIdx !== -1) memoryRecentCallIds.splice(existingIdx, 1)
+  memoryRecentCallIds.unshift(record.id)
+  if (memoryRecentCallIds.length > CALL_STATUS_LIMIT) {
+    const popped = memoryRecentCallIds.pop()
+    if (popped) memoryCallStatusMap.delete(popped)
+  }
+
+  // 2. 默认使用纯内存记录，绝不消耗宝贵的 KV 写配额；只有当显式开启环境变量 ENABLE_CALL_STATUS_KV === 'true' 时才尝试落盘 KV
+  if ((env as any).ENABLE_CALL_STATUS_KV === 'true') {
+    await safeKvPut(env.KV, callStatusKey(record.id), JSON.stringify(record), {
+      expirationTtl: CALL_STATUS_TTL_SECONDS,
+    })
+
+    const next = [...memoryRecentCallIds].slice(0, CALL_STATUS_LIMIT)
+    await safeKvPut(env.KV, KV_KEYS.CALL_STATUS_RECENT, JSON.stringify(next), {
+      expirationTtl: CALL_STATUS_TTL_SECONDS,
+    })
+  }
 }
 
 export async function recordCallEnd(
@@ -201,43 +239,79 @@ export async function recordCallEnd(
   id: string,
   updates: Pick<CallStatusRecord, 'status' | 'statusCode'> & Partial<Pick<CallStatusRecord, 'error'>>
 ): Promise<void> {
-  const raw = await env.KV.get(callStatusKey(id))
-  if (!raw) return
-
-  const record = JSON.parse(raw) as CallStatusRecord
+  const memRecord = memoryCallStatusMap.get(id)
   const endedAt = new Date()
-  const startedAt = new Date(record.startedAt).getTime()
-  const next: CallStatusRecord = {
-    ...record,
-    ...updates,
-    endedAt: endedAt.toISOString(),
-    updatedAt: endedAt.toISOString(),
-    durationMs: Math.max(0, endedAt.getTime() - startedAt),
+  if (memRecord) {
+    const startedAt = new Date(memRecord.startedAt).getTime()
+    memoryCallStatusMap.set(id, {
+      ...memRecord,
+      ...updates,
+      endedAt: endedAt.toISOString(),
+      updatedAt: endedAt.toISOString(),
+      durationMs: Math.max(0, endedAt.getTime() - startedAt),
+    })
   }
 
-  await env.KV.put(callStatusKey(id), JSON.stringify(next), {
-    expirationTtl: CALL_STATUS_TTL_SECONDS,
-  })
+  if ((env as any).ENABLE_CALL_STATUS_KV === 'true') {
+    try {
+      const raw = await env.KV.get(callStatusKey(id)).catch(() => null)
+      if (raw) {
+        const record = JSON.parse(raw) as CallStatusRecord
+        const startedAt = new Date(record.startedAt).getTime()
+        const next: CallStatusRecord = {
+          ...record,
+          ...updates,
+          endedAt: endedAt.toISOString(),
+          updatedAt: endedAt.toISOString(),
+          durationMs: Math.max(0, endedAt.getTime() - startedAt),
+        }
+
+        await safeKvPut(env.KV, callStatusKey(id), JSON.stringify(next), {
+          expirationTtl: CALL_STATUS_TTL_SECONDS,
+        })
+      }
+    } catch {
+      // 忽略
+    }
+  }
 }
 
 export async function getRecentCallStatuses(env: Env): Promise<CallStatusRecord[]> {
-  const raw = await env.KV.get(KV_KEYS.CALL_STATUS_RECENT)
-  const ids = raw ? JSON.parse(raw) as string[] : []
-  const records = await Promise.all(ids.map(async (id) => {
-    const item = await env.KV.get(callStatusKey(id))
-    return item ? JSON.parse(item) as CallStatusRecord : null
-  }))
+  const listFromMemory = Array.from(memoryCallStatusMap.values())
+  if ((env as any).ENABLE_CALL_STATUS_KV === 'true') {
+    try {
+      const raw = await env.KV.get(KV_KEYS.CALL_STATUS_RECENT).catch(() => null)
+      const ids = raw ? JSON.parse(raw) as string[] : []
+      const records = await Promise.all(ids.map(async (id) => {
+        const item = await env.KV.get(callStatusKey(id)).catch(() => null)
+        return item ? JSON.parse(item) as CallStatusRecord : memoryCallStatusMap.get(id) || null
+      }))
 
-  return records
-    .filter((item): item is CallStatusRecord => item !== null)
-    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+      const validRecords = records.filter((item): item is CallStatusRecord => item !== null)
+      if (validRecords.length > 0) {
+        return validRecords.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+      }
+    } catch {
+      // 忽略
+    }
+  }
+
+  return listFromMemory.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
 }
 
 export async function clearRecentCallStatuses(env: Env): Promise<void> {
-  const raw = await env.KV.get(KV_KEYS.CALL_STATUS_RECENT)
-  const ids = raw ? JSON.parse(raw) as string[] : []
-  await Promise.all(ids.map((id) => env.KV.delete(callStatusKey(id)).catch(() => {})))
-  await env.KV.delete(KV_KEYS.CALL_STATUS_RECENT).catch(() => {})
+  memoryCallStatusMap.clear()
+  memoryRecentCallIds.length = 0
+  if ((env as any).ENABLE_CALL_STATUS_KV === 'true') {
+    try {
+      const raw = await env.KV.get(KV_KEYS.CALL_STATUS_RECENT).catch(() => null)
+      const ids = raw ? JSON.parse(raw) as string[] : []
+      await Promise.all(ids.map((id) => env.KV.delete(callStatusKey(id)).catch(() => {})))
+      await env.KV.delete(KV_KEYS.CALL_STATUS_RECENT).catch(() => {})
+    } catch {
+      // 忽略
+    }
+  }
 }
 // ===== Session 管理 =====
 
@@ -247,7 +321,7 @@ export async function createSession(env: Env, username: string, ttlSeconds: numb
     username,
     expiresAt: Date.now() + ttlSeconds * 1000,
   }
-  await env.KV.put(KV_KEYS.SESSION_PREFIX + sessionId, JSON.stringify(session), {
+  await safeKvPut(env.KV, KV_KEYS.SESSION_PREFIX + sessionId, JSON.stringify(session), {
     expirationTtl: ttlSeconds,
   })
   return sessionId
@@ -276,7 +350,7 @@ export async function createOpenAIOAuthSession(
   session: OpenAIOAuthSession,
   ttlSeconds: number,
 ): Promise<void> {
-  await env.KV.put(KV_KEYS.OPENAI_OAUTH_SESSION_PREFIX + sessionId, JSON.stringify(session), {
+  await safeKvPut(env.KV, KV_KEYS.OPENAI_OAUTH_SESSION_PREFIX + sessionId, JSON.stringify(session), {
     expirationTtl: ttlSeconds,
   })
 }
@@ -304,7 +378,7 @@ export async function getProxyKeys(env: Env): Promise<ProxyKey[]> {
 }
 
 export async function setProxyKeys(env: Env, keys: ProxyKey[]): Promise<void> {
-  await env.KV.put(KV_KEYS.PROXY_KEYS, JSON.stringify(keys))
+  await safeKvPut(env.KV, KV_KEYS.PROXY_KEYS, JSON.stringify(keys))
   proxyKeysCache = keys
   proxyKeysCacheTime = Date.now()
 }
